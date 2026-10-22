@@ -370,37 +370,56 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ success: true, message: 'Inquiry received' }, 200, corsHeaders)
   }
 
-  // 12. Database Insertion
+  // 12. Database Insertion (Atomic RPC with reliable idempotent fallback)
   const ipHash = await hashIp(clientIp)
-  const { data: insertedLead, error: insertError } = await supabase
-    .from('leads')
-    .insert([
-      {
-        name,
-        email,
-        service,
-        project_overview: message,
-        ip_hash: ipHash,
-        notification_status: 'pending',
-      },
-    ])
-    .select('id')
-    .single()
+  let leadId: string | null = null
 
-  if (insertError || !insertedLead) {
-    console.error('[submit-lead] Database insert error code:', insertError?.code)
-    return jsonResponse(
-      { success: false, message: 'Unable to save inquiry. Please try again shortly.' },
-      500,
-      corsHeaders
-    )
-  }
+  // Attempt atomic transaction via submit_lead_with_job RPC
+  const { data: atomicData, error: atomicError } = await supabase.rpc('submit_lead_with_job', {
+    p_name: name,
+    p_email: email,
+    p_service: service,
+    p_project_overview: message,
+    p_ip_hash: ipHash,
+  })
 
-  const leadId = insertedLead.id
-  console.log(`[submit-lead] Lead successfully created with ID: ${leadId}`)
+  if (!atomicError && atomicData && atomicData.length > 0) {
+    leadId = atomicData[0].lead_id
+    console.log(`[submit-lead] Atomically created lead ${leadId} and AI service job`)
+  } else {
+    if (atomicError) {
+      console.warn('[submit-lead] Atomic RPC notice, falling back to sequential transaction:', atomicError.message)
+    }
 
-  // 12b. Enqueue AI Service Job Idempotently
-  try {
+    // Sequential fallback: insert lead record
+    const { data: insertedLead, error: insertError } = await supabase
+      .from('leads')
+      .insert([
+        {
+          name,
+          email,
+          service,
+          project_overview: message,
+          ip_hash: ipHash,
+          notification_status: 'pending',
+        },
+      ])
+      .select('id')
+      .single()
+
+    if (insertError || !insertedLead) {
+      console.error('[submit-lead] Database insert error code:', insertError?.code)
+      return jsonResponse(
+        { success: false, message: 'Unable to save inquiry. Please try again shortly.' },
+        500,
+        corsHeaders
+      )
+    }
+
+    leadId = insertedLead.id
+    console.log(`[submit-lead] Lead successfully created with ID: ${leadId}`)
+
+    // Enqueue initial AI Service Job idempotently
     const { error: jobEnqueueError } = await supabase
       .from('ai_service_jobs')
       .upsert(
@@ -409,17 +428,32 @@ Deno.serve(async (req: Request) => {
             lead_id: leadId,
             service,
             status: 'queued',
+            delivery_status: 'not_started',
+            revision_count: 1,
           },
         ],
-        { onConflict: 'lead_id', ignoreDuplicates: true }
+        { onConflict: 'lead_id' }
       )
+
     if (jobEnqueueError) {
-      console.warn('[submit-lead] Note: AI job queue notice:', jobEnqueueError.message)
-    } else {
-      console.log(`[submit-lead] AI service job queued for lead: ${leadId}`)
+      console.error('[submit-lead] CRITICAL: Failed to enqueue AI service job for lead:', leadId, jobEnqueueError.message)
+      // Record observable error state on lead rather than silently ignoring
+      await supabase
+        .from('leads')
+        .update({
+          notification_status: 'queue_failed',
+          notification_error: jobEnqueueError.message,
+        })
+        .eq('id', leadId)
+
+      return jsonResponse(
+        { success: false, message: 'Your inquiry was recorded, but processing queue encountered an issue. Our team has been notified.' },
+        500,
+        corsHeaders
+      )
     }
-  } catch (err) {
-    console.warn('[submit-lead] AI job queue exception:', (err as Error).message)
+
+    console.log(`[submit-lead] AI service job queued for lead: ${leadId}`)
   }
 
   // 13. Email Notification Dispatch (Resend / Transactional API)

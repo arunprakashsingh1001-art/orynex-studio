@@ -5,7 +5,7 @@
 // ==============================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { callGeminiServiceWorkflow } from './gemini.ts'
+import { orchestrateAiServiceWorkflow } from './router.ts'
 import { ServiceType } from './prompts.ts'
 
 const CORS_HEADERS = {
@@ -151,30 +151,53 @@ Deno.serve(async (req: Request) => {
     })
     .eq('id', jobToProcess.id)
 
-  console.log(`[process-ai-workflow] Processing job ${jobToProcess.id} for service "${jobToProcess.service}"...`)
+  const revisionNumber = (jobToProcess.revision_count as number) || 1
+  console.log(`[process-ai-workflow] Processing job ${jobToProcess.id} (rev ${revisionNumber}) for service "${jobToProcess.service}"...`)
 
-  // 5. Invoke Gemini API
-  const geminiResult = await callGeminiServiceWorkflow({
+  // 5. Invoke AI Orchestrator (handles complexity, critique, prompts, and schema validation)
+  const aiResult = await orchestrateAiServiceWorkflow({
     service: jobToProcess.service as ServiceType,
     clientName: lead.name,
     clientEmail: lead.email,
     briefText: lead.project_overview || '',
+    revisionNumber,
+    previousDraft: (jobToProcess.edited_draft || jobToProcess.generated_draft) as Record<string, unknown> | null,
+    refinedInstructions: (jobToProcess.refined_instructions as string) || null,
   })
 
   // 6. Handle Outcome & State Transitions
-  if (geminiResult.success && geminiResult.draft) {
+  if (aiResult.success && aiResult.draft) {
+    // Persist immutable revision history record
+    try {
+      await supabase.from('ai_job_revisions').upsert(
+        [
+          {
+            job_id: jobToProcess.id,
+            revision_number: revisionNumber,
+            model: aiResult.modelUsed,
+            provider: aiResult.provider,
+            complexity: aiResult.complexity,
+            prompt_snapshot: aiResult.promptSnapshot,
+            refined_instructions: (jobToProcess.refined_instructions as string) || null,
+            draft: aiResult.draft,
+            validation_results: aiResult.validation,
+            critique_notes: aiResult.critiqueNotes || null,
+          },
+        ],
+        { onConflict: 'job_id,revision_number' }
+      )
+    } catch (revArchiveErr) {
+      console.warn('[process-ai-workflow] Notice: ai_job_revisions archive:', (revArchiveErr as Error).message)
+    }
+
     const { error: updateError } = await supabase
       .from('ai_service_jobs')
       .update({
-        status: 'review_pending', // Must be reviewed by admin before client delivery
-        generated_draft: geminiResult.draft,
-        prompt_snapshot: geminiResult.promptSnapshot,
-        model: geminiResult.modelUsed,
-        validation_results: {
-          valid: true,
-          validated_at: new Date().toISOString(),
-          error_count: 0,
-        },
+        status: 'review_pending', // Hard boundary: must be explicitly reviewed and approved by admin
+        generated_draft: aiResult.draft,
+        prompt_snapshot: aiResult.promptSnapshot,
+        model: aiResult.modelUsed,
+        validation_results: aiResult.validation,
         error_message: null,
         locked_at: null,
         locked_by: null,
@@ -190,15 +213,42 @@ Deno.serve(async (req: Request) => {
       })
     }
 
-    console.log(`[process-ai-workflow] Job ${jobToProcess.id} successfully generated and transitioned to review_pending`)
+    console.log(`[process-ai-workflow] Job ${jobToProcess.id} rev ${revisionNumber} transitioned to review_pending (client delivery NOT triggered)`)
+
+    // Notify administrator that a new draft is ready for review (Internal Admin Notification Only)
+    const resendApiKey = Deno.env.get('RESEND_API_KEY')
+    const adminEmail = Deno.env.get('ADMIN_NOTIFICATION_EMAIL') || Deno.env.get('ADMIN_EMAIL') || 'arunprakashsingh1001@gmail.com'
+    const senderEmail = Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
+
+    if (resendApiKey && adminEmail) {
+      try {
+        await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: senderEmail,
+            to: [adminEmail],
+            subject: `[Admin Review Ready] Proposal Draft (Rev ${revisionNumber}) for ${lead.name}`,
+            html: `<p>A new deliverable draft (Revision ${revisionNumber}) is ready for your review and approval in the Orynex Studio Admin Portal.</p><p><strong>Client:</strong> ${lead.name} (${lead.email})<br><strong>Service:</strong> ${jobToProcess.service}<br><strong>Status:</strong> review_pending</p><p><a href="https://orynexstudio-git-main-team-itachi.vercel.app/#/admin">Open Admin Portal &rarr;</a></p>`,
+          }),
+        })
+      } catch (notifyErr) {
+        console.warn('[process-ai-workflow] Admin notification notice:', (notifyErr as Error).message)
+      }
+    }
 
     return new Response(
       JSON.stringify({
         success: true,
         job_id: jobToProcess.id,
         status: 'review_pending',
+        revision_number: revisionNumber,
         service: jobToProcess.service,
-        model: geminiResult.modelUsed,
+        model: aiResult.modelUsed,
+        complexity: aiResult.complexity,
       }),
       { status: 200, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } }
     )
@@ -209,14 +259,14 @@ Deno.serve(async (req: Request) => {
     const nextRetry = currentRetries + 1
     const isExhausted = nextRetry >= maxRetries
 
-    console.error(`[process-ai-workflow] Job ${jobToProcess.id} failed (attempt ${nextRetry}/${maxRetries}): ${geminiResult.error}`)
+    console.error(`[process-ai-workflow] Job ${jobToProcess.id} failed (attempt ${nextRetry}/${maxRetries}): ${aiResult.error}`)
 
     await supabase
       .from('ai_service_jobs')
       .update({
         status: isExhausted ? 'failed' : 'queued',
         retry_count: nextRetry,
-        error_message: geminiResult.error || 'Gemini processing failed',
+        error_message: aiResult.error || 'AI generation failed',
         locked_at: null,
         locked_by: null,
         updated_at: new Date().toISOString(),
@@ -229,7 +279,7 @@ Deno.serve(async (req: Request) => {
         job_id: jobToProcess.id,
         status: isExhausted ? 'failed' : 'queued',
         retry_count: nextRetry,
-        error: geminiResult.error,
+        error: aiResult.error,
       }),
       { status: isExhausted ? 500 : 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } }
     )

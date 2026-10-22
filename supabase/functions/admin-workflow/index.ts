@@ -90,20 +90,34 @@ Deno.serve(async (req: Request) => {
   }
 
   const authenticatedUser = authData.user
+  const userEmail = (authenticatedUser.email || '').toLowerCase().trim()
+  const AUTHORIZED_ADMIN_EMAIL = 'arunprakashsingh1001@gmail.com'
 
-  // 2. Authorize Admin Role via public.admin_users
+  // 2. Authorize Admin Role via Single-Admin Email Allowlist & public.admin_users
+  if (userEmail !== AUTHORIZED_ADMIN_EMAIL) {
+    console.warn(`[admin-workflow] Access denied for user ${authenticatedUser.id} (${userEmail}): not on authorized administrator allowlist`)
+    return jsonResponse(
+      {
+        success: false,
+        message: 'Forbidden: Your email address is not authorized as an Orynex Studio administrator.',
+      },
+      403,
+      corsHeaders
+    )
+  }
+
   const { data: adminRecord, error: adminQueryError } = await supabase
     .from('admin_users')
     .select('id, user_id, email, role')
     .eq('user_id', authenticatedUser.id)
     .single()
 
-  if (adminQueryError || !adminRecord) {
-    console.warn(`[admin-workflow] Access denied for user ${authenticatedUser.id} (${authenticatedUser.email}): not registered in admin_users`)
+  if (adminQueryError || !adminRecord || !['admin', 'superadmin'].includes(adminRecord.role)) {
+    console.warn(`[admin-workflow] Access denied for user ${authenticatedUser.id} (${userEmail}): missing or invalid role in admin_users`)
     return jsonResponse(
       {
         success: false,
-        message: 'Forbidden: Your account is not authorized as an Orynex Studio administrator.',
+        message: 'Forbidden: Your account does not have active administrator privileges in admin_users.',
       },
       403,
       corsHeaders
@@ -181,7 +195,40 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: false, message: 'Job not found' }, 404, corsHeaders)
       }
 
-      return jsonResponse({ success: true, job }, 200, corsHeaders)
+      // Fetch immutable revision history
+      const { data: revisions } = await supabase
+        .from('ai_job_revisions')
+        .select('*')
+        .eq('job_id', jobId)
+        .order('revision_number', { ascending: true })
+
+      // Fetch administrator decision history
+      const { data: decisions } = await supabase
+        .from('ai_review_decisions')
+        .select('*')
+        .eq('job_id', jobId)
+        .order('created_at', { ascending: true })
+
+      // Fetch delivery outbox history
+      const { data: deliveryLogs } = await supabase
+        .from('ai_delivery_logs')
+        .select('*')
+        .eq('job_id', jobId)
+        .order('created_at', { ascending: false })
+
+      return jsonResponse(
+        {
+          success: true,
+          job: {
+            ...job,
+            revisions: revisions || [],
+            decisions: decisions || [],
+            delivery_logs: deliveryLogs || [],
+          },
+        },
+        200,
+        corsHeaders
+      )
     }
 
     return jsonResponse({ success: false, message: `Unknown action: ${action}` }, 400, corsHeaders)
@@ -240,12 +287,29 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: false, message: updateErr.message }, 500, corsHeaders)
       }
 
+      // Record edit decision in audit table
+      try {
+        await supabase.from('ai_review_decisions').insert([
+          {
+            job_id: jobId,
+            revision_number: existingJob.revision_count || 1,
+            action: 'edit_draft',
+            feedback: reviewNotes,
+            reviewed_by: authenticatedUser.id,
+            reviewed_by_email: userEmail,
+            draft_snapshot: editedDraft,
+          },
+        ])
+      } catch (auditErr) {
+        console.warn('[admin-workflow] Audit record notice:', (auditErr as Error).message)
+      }
+
       return jsonResponse({ success: true, message: 'Draft edits saved successfully' }, 200, corsHeaders)
     }
 
-    // 2. Reject Job Action
+    // 2. Reject Job / Permanently Close Action
     if (action === 'reject_job') {
-      const reviewNotes = (payload.review_notes as string) || 'Rejected by administrator'
+      const reviewNotes = (payload.review_notes as string) || 'Rejected permanently by administrator'
 
       const { error: rejectErr } = await supabase
         .from('ai_service_jobs')
@@ -262,19 +326,87 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: false, message: rejectErr.message }, 500, corsHeaders)
       }
 
-      return jsonResponse({ success: true, message: 'Job marked as rejected' }, 200, corsHeaders)
+      try {
+        await supabase.from('ai_review_decisions').insert([
+          {
+            job_id: jobId,
+            revision_number: existingJob.revision_count || 1,
+            action: 'reject_permanently',
+            feedback: reviewNotes,
+            reviewed_by: authenticatedUser.id,
+            reviewed_by_email: userEmail,
+            draft_snapshot: existingJob.edited_draft || existingJob.generated_draft,
+          },
+        ])
+      } catch (auditErr) {
+        console.warn('[admin-workflow] Audit record notice:', (auditErr as Error).message)
+      }
+
+      return jsonResponse({ success: true, message: 'Job marked as permanently rejected' }, 200, corsHeaders)
     }
 
-    // 3. Regenerate Job Action
-    if (action === 'regenerate_job') {
+    // 3. Request Revision Action (Rejection with Feedback Loop)
+    if (action === 'request_revision' || action === 'regenerate_job') {
+      const feedback = typeof payload.feedback === 'string' ? payload.feedback.trim() : (payload.review_notes as string || '').trim()
+
+      if (!feedback || feedback.length < 5) {
+        return jsonResponse(
+          {
+            success: false,
+            message: 'Mandatory revision feedback is required (minimum 5 characters) to return job to AI processing.',
+          },
+          422,
+          corsHeaders
+        )
+      }
+
+      const currentRevision = (existingJob.revision_count as number) || 1
+      const maxRevisions = (existingJob.max_revisions as number) || 5
+
+      if (currentRevision >= maxRevisions) {
+        return jsonResponse(
+          {
+            success: false,
+            message: `Maximum revision limit reached (${maxRevisions} revisions). Manual intervention required; draft cannot be automatically revised further.`,
+          },
+          422,
+          corsHeaders
+        )
+      }
+
+      const nextRevision = currentRevision + 1
+
+      // Record revision decision in audit table
+      try {
+        await supabase.from('ai_review_decisions').insert([
+          {
+            job_id: jobId,
+            revision_number: currentRevision,
+            action: 'request_revision',
+            feedback,
+            reviewed_by: authenticatedUser.id,
+            reviewed_by_email: userEmail,
+            draft_snapshot: existingJob.edited_draft || existingJob.generated_draft,
+          },
+        ])
+      } catch (auditErr) {
+        console.warn('[admin-workflow] Audit record notice:', (auditErr as Error).message)
+      }
+
       const { error: regenErr } = await supabase
         .from('ai_service_jobs')
         .update({
           status: 'queued',
+          revision_count: nextRevision,
+          refined_instructions: feedback,
+          review_notes: feedback,
+          reviewed_by: authenticatedUser.id,
+          reviewed_at: new Date().toISOString(),
           retry_count: 0,
           error_message: null,
           locked_at: null,
           locked_by: null,
+          delivery_status: 'not_started',
           updated_at: new Date().toISOString(),
         })
         .eq('id', jobId)
@@ -283,10 +415,147 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ success: false, message: regenErr.message }, 500, corsHeaders)
       }
 
-      return jsonResponse({ success: true, message: 'Job re-queued for generation' }, 200, corsHeaders)
+      return jsonResponse(
+        {
+          success: true,
+          message: `Revision ${nextRevision} requested with feedback. AI worker will generate a refined draft.`,
+          revision_number: nextRevision,
+        },
+        200,
+        corsHeaders
+      )
     }
 
-    // 4. Approve and Deliver to Client Action (Phase 5 Email Delivery)
+    // 4. Retry Delivery Action (Safe retry for approved jobs that encountered email failure)
+    if (action === 'retry_delivery') {
+      if (existingJob.delivery_status === 'sent') {
+        return jsonResponse(
+          { success: false, message: 'Delivery already sent to client. Duplicate dispatch prevented.' },
+          409,
+          corsHeaders
+        )
+      }
+
+      if (existingJob.status !== 'approved' && existingJob.status !== 'delivered') {
+        return jsonResponse(
+          { success: false, message: 'Cannot retry delivery for a job that has not been approved by an administrator.' },
+          422,
+          corsHeaders
+        )
+      }
+
+      const approvedSnapshot = existingJob.approved_snapshot || existingJob.edited_draft || existingJob.generated_draft
+      if (!approvedSnapshot) {
+        return jsonResponse(
+          { success: false, message: 'No approved deliverable snapshot found to retry.' },
+          422,
+          corsHeaders
+        )
+      }
+
+      const clientEmail = existingJob.leads?.email
+      const clientName = existingJob.leads?.name || 'Client'
+      const service = existingJob.service
+
+      const resendApiKey = Deno.env.get('RESEND_API_KEY')
+      const senderEmail = Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
+      const isTestDelivery = Deno.env.get('TEST_DELIVERY_MODE') === 'true' || !resendApiKey
+
+      let resendId: string | null = null
+      let deliverySuccess = false
+      let deliveryErrorMsg: string | null = null
+
+      if (isTestDelivery) {
+        resendId = `sim_resend_retry_${crypto.randomUUID().slice(0, 8)}`
+        deliverySuccess = true
+      } else {
+        try {
+          const clientEmailHtml = formatClientDeliveryEmail(clientName, service, approvedSnapshot)
+          const resendRes = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${resendApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              from: senderEmail,
+              to: [clientEmail],
+              subject: `Your ${service} Proposal from Orynex Studio`,
+              html: clientEmailHtml,
+            }),
+          })
+
+          if (resendRes.ok) {
+            const resData = await resendRes.json()
+            resendId = resData?.id || `resend_${crypto.randomUUID().slice(0, 8)}`
+            deliverySuccess = true
+          } else {
+            const errText = await resendRes.text()
+            deliveryErrorMsg = `Resend HTTP ${resendRes.status}: ${errText.slice(0, 200)}`
+          }
+        } catch (dispatchErr) {
+          deliveryErrorMsg = (dispatchErr as Error).message
+        }
+      }
+
+      if (deliverySuccess) {
+        await supabase
+          .from('ai_service_jobs')
+          .update({
+            status: 'delivered',
+            delivery_status: 'sent',
+            delivered_at: new Date().toISOString(),
+            delivery_resend_id: resendId,
+            delivery_error: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', jobId)
+
+        await supabase.from('ai_delivery_logs').insert([
+          {
+            job_id: jobId,
+            recipient: clientEmail,
+            status: 'success',
+            resend_id: resendId,
+            payload_snapshot: approvedSnapshot,
+          },
+        ])
+
+        return jsonResponse(
+          { success: true, message: 'Delivery retried and dispatched successfully', resend_id: resendId },
+          200,
+          corsHeaders
+        )
+      } else {
+        await supabase
+          .from('ai_service_jobs')
+          .update({
+            delivery_status: 'failed',
+            delivery_error: deliveryErrorMsg,
+            delivery_attempts: (existingJob.delivery_attempts || 0) + 1,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', jobId)
+
+        await supabase.from('ai_delivery_logs').insert([
+          {
+            job_id: jobId,
+            recipient: clientEmail,
+            status: 'failed',
+            error: deliveryErrorMsg,
+            payload_snapshot: approvedSnapshot,
+          },
+        ])
+
+        return jsonResponse(
+          { success: false, message: 'Retry delivery failed', error: deliveryErrorMsg },
+          502,
+          corsHeaders
+        )
+      }
+    }
+
+    // 5. Approve and Deliver to Client Action (Hard Admin Boundary)
     if (action === 'approve_and_deliver') {
       // Check delivery idempotency: avoid duplicate sending
       if (existingJob.delivery_status === 'sent') {
@@ -297,6 +566,18 @@ Deno.serve(async (req: Request) => {
             resend_id: existingJob.delivery_resend_id,
           },
           409,
+          corsHeaders
+        )
+      }
+
+      // Hard review boundary: Job must be in review_pending state
+      if (existingJob.status !== 'review_pending') {
+        return jsonResponse(
+          {
+            success: false,
+            message: `Cannot approve job: job is not awaiting review (current status: ${existingJob.status}).`,
+          },
+          422,
           corsHeaders
         )
       }
@@ -313,6 +594,7 @@ Deno.serve(async (req: Request) => {
       const clientEmail = existingJob.leads?.email
       const clientName = existingJob.leads?.name || 'Client'
       const service = existingJob.service
+      const currentRevision = (existingJob.revision_count as number) || 1
 
       if (!clientEmail) {
         return jsonResponse(
@@ -322,13 +604,15 @@ Deno.serve(async (req: Request) => {
         )
       }
 
-      // Mark job as approved in database first
-      const reviewNotes = (payload.review_notes as string) || 'Approved for delivery by admin'
+      // Bind immutable approved snapshot and mark job as approved in database
+      const reviewNotes = (payload.review_notes as string) || `Approved Revision ${currentRevision} for delivery by admin`
       await supabase
         .from('ai_service_jobs')
         .update({
           status: 'approved',
           delivery_status: 'pending',
+          approved_revision: currentRevision,
+          approved_snapshot: activeDraft,
           review_notes: reviewNotes,
           reviewed_by: authenticatedUser.id,
           reviewed_at: new Date().toISOString(),
@@ -336,7 +620,24 @@ Deno.serve(async (req: Request) => {
         })
         .eq('id', jobId)
 
-      // Dispatch Client Delivery Email via Resend
+      // Record approval decision in audit table
+      try {
+        await supabase.from('ai_review_decisions').insert([
+          {
+            job_id: jobId,
+            revision_number: currentRevision,
+            action: 'approve',
+            feedback: reviewNotes,
+            reviewed_by: authenticatedUser.id,
+            reviewed_by_email: userEmail,
+            draft_snapshot: activeDraft,
+          },
+        ])
+      } catch (auditErr) {
+        console.warn('[admin-workflow] Audit record notice:', (auditErr as Error).message)
+      }
+
+      // Dispatch Client Delivery Email via Resend using ONLY the immutable approved snapshot
       const resendApiKey = Deno.env.get('RESEND_API_KEY')
       const senderEmail = Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
       const isTestDelivery = Deno.env.get('TEST_DELIVERY_MODE') === 'true' || !resendApiKey
@@ -347,7 +648,7 @@ Deno.serve(async (req: Request) => {
 
       if (isTestDelivery) {
         // Safe simulated delivery during test mode or when Resend key is unconfigured
-        console.log(`[admin-workflow] Simulated client delivery email for job ${jobId} to ${clientEmail}`)
+        console.log(`[admin-workflow] Simulated client delivery email for job ${jobId} (Rev ${currentRevision}) to ${clientEmail}`)
         resendId = `sim_resend_${crypto.randomUUID().slice(0, 12)}`
         deliverySuccess = true
       } else {
@@ -407,10 +708,11 @@ Deno.serve(async (req: Request) => {
         return jsonResponse(
           {
             success: true,
-            message: 'Proposal successfully approved and delivered to client',
+            message: `Proposal (Revision ${currentRevision}) successfully approved and delivered to client`,
             job_id: jobId,
             delivery_status: 'sent',
             resend_id: resendId,
+            approved_revision: currentRevision,
           },
           200,
           corsHeaders
@@ -439,10 +741,11 @@ Deno.serve(async (req: Request) => {
         return jsonResponse(
           {
             success: false,
-            message: 'Job was approved, but client delivery email failed to dispatch',
+            message: 'Job was approved and snapshot locked, but client delivery email failed to dispatch',
             error: deliveryErrorMsg,
             job_id: jobId,
             delivery_status: 'failed',
+            approved_revision: currentRevision,
           },
           502,
           corsHeaders

@@ -1,10 +1,13 @@
 // ==============================================================================
 // Orynex Studio — Admin Review & Approval Portal
 // Security: Authenticates via Supabase Auth & verifies role via admin-workflow
+// Authorized Administrator: arunprakashsingh1001@gmail.com
 // ==============================================================================
 
 import { useState, useEffect, useCallback } from 'react'
 import './AdminPortal.css'
+
+const AUTHORIZED_ADMIN_EMAIL = 'arunprakashsingh1001@gmail.com'
 
 export default function AdminPortal() {
   const [token, setToken] = useState(() => localStorage.getItem('orynex_admin_token') || '')
@@ -18,7 +21,7 @@ export default function AdminPortal() {
 
   const [authError, setAuthError] = useState(null)
   const [authLoading, setAuthLoading] = useState(false)
-  const [credentials, setCredentials] = useState({ email: '', password: '' })
+  const [credentials, setCredentials] = useState({ email: AUTHORIZED_ADMIN_EMAIL, password: '' })
 
   const [jobs, setJobs] = useState([])
   const [selectedJob, setSelectedJob] = useState(null)
@@ -27,9 +30,16 @@ export default function AdminPortal() {
   const [actionLoading, setActionLoading] = useState(false)
   const [actionMessage, setActionMessage] = useState(null)
 
+  // Active view tab in detail panel: 'proposal' | 'revisions' | 'decisions' | 'delivery'
+  const [activeTab, setActiveTab] = useState('proposal')
+
   // Draft editor state
   const [draftJsonText, setDraftJsonText] = useState('')
   const [reviewNotes, setReviewNotes] = useState('')
+
+  // Revision feedback state
+  const [showRevisionModal, setShowRevisionModal] = useState(false)
+  const [revisionFeedback, setRevisionFeedback] = useState('')
 
   const getAdminEndpoint = () => {
     const fnUrl = import.meta.env.VITE_SUPABASE_FUNCTIONS_URL
@@ -92,12 +102,12 @@ export default function AdminPortal() {
         setCurrentUser(data.user)
         localStorage.setItem('orynex_admin_token', data.access_token)
         localStorage.setItem('orynex_admin_user', JSON.stringify(data.user))
-        setCredentials({ email: '', password: '' })
+        setCredentials({ email: AUTHORIZED_ADMIN_EMAIL, password: '' })
       } else {
         setAuthError(data?.error_description || data?.msg || data?.message || 'Authentication failed. Please verify credentials.')
       }
     } catch (err) {
-      setAuthError(`Connection error: ${(err).message}`)
+      setAuthError(`Connection error: ${err.message}`)
     } finally {
       setAuthLoading(false)
     }
@@ -111,6 +121,37 @@ export default function AdminPortal() {
     localStorage.removeItem('orynex_admin_token')
     localStorage.removeItem('orynex_admin_user')
   }
+
+  const selectJob = useCallback(async (job) => {
+    setSelectedJob(job)
+    const activeDraft = job.edited_draft || job.generated_draft || {}
+    setDraftJsonText(JSON.stringify(activeDraft, null, 2))
+    setReviewNotes(job.review_notes || '')
+    setActionMessage(null)
+    setShowRevisionModal(false)
+    setRevisionFeedback('')
+
+    // Fetch full job with history and decisions
+    const endpoint = getAdminEndpoint()
+    if (endpoint && token) {
+      try {
+        const res = await fetch(`${endpoint}?action=get_job&job_id=${job.id}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(import.meta.env.VITE_SUPABASE_ANON_KEY ? { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY } : {}),
+          },
+        })
+        const data = await res.json()
+        if (res.ok && data?.job) {
+          setSelectedJob(data.job)
+          const draft = data.job.edited_draft || data.job.generated_draft || {}
+          setDraftJsonText(JSON.stringify(draft, null, 2))
+        }
+      } catch (err) {
+        console.warn('Failed to fetch detailed job history:', err)
+      }
+    }
+  }, [token])
 
   const fetchJobs = useCallback(async () => {
     if (!token) return
@@ -142,7 +183,7 @@ export default function AdminPortal() {
       }
 
       if (res.status === 403) {
-        setAuthError(data?.message || 'Forbidden: User is not authorized in admin_users table.')
+        setAuthError(data?.message || 'Forbidden: Your account is not authorized as an Orynex Studio administrator.')
         return
       }
 
@@ -155,25 +196,17 @@ export default function AdminPortal() {
         setActionMessage({ type: 'error', text: data?.message || 'Failed to fetch jobs' })
       }
     } catch (err) {
-      setActionMessage({ type: 'error', text: `Fetch error: ${(err).message}` })
+      setActionMessage({ type: 'error', text: `Fetch error: ${err.message}` })
     } finally {
       setLoadingJobs(false)
     }
-  }, [token, filterStatus, selectedJob])
+  }, [token, filterStatus, selectedJob, selectJob])
 
   useEffect(() => {
     if (token) {
       fetchJobs()
     }
   }, [token, filterStatus, fetchJobs])
-
-  const selectJob = (job) => {
-    setSelectedJob(job)
-    const activeDraft = job.edited_draft || job.generated_draft || {}
-    setDraftJsonText(JSON.stringify(activeDraft, null, 2))
-    setReviewNotes(job.review_notes || '')
-    setActionMessage(null)
-  }
 
   const handleAdminAction = async (actionType) => {
     if (!selectedJob || !token) return
@@ -198,6 +231,15 @@ export default function AdminPortal() {
       }
     }
 
+    if (actionType === 'request_revision') {
+      if (!revisionFeedback || revisionFeedback.trim().length < 5) {
+        setActionMessage({ type: 'error', text: 'Mandatory revision feedback is required (minimum 5 characters).' })
+        setActionLoading(false)
+        return
+      }
+      payload.feedback = revisionFeedback.trim()
+    }
+
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -213,13 +255,16 @@ export default function AdminPortal() {
 
       if (res.ok && data?.success) {
         setActionMessage({ type: 'success', text: data.message })
-        // Refresh job list
-        fetchJobs()
+        setShowRevisionModal(false)
+        setRevisionFeedback('')
+        // Refresh job list and active selection
+        await fetchJobs()
+        selectJob({ ...selectedJob, id: selectedJob.id })
       } else {
         setActionMessage({ type: 'error', text: data?.message || data?.error || 'Action failed' })
       }
     } catch (err) {
-      setActionMessage({ type: 'error', text: `Action error: ${(err).message}` })
+      setActionMessage({ type: 'error', text: `Action error: ${err.message}` })
     } finally {
       setActionLoading(false)
     }
@@ -241,7 +286,10 @@ export default function AdminPortal() {
 
         <div className="admin-auth-card">
           <h2>Administrator Sign In</h2>
-          <p>Sign in with your verified Supabase Admin credentials to review and approve client deliverables.</p>
+          <p>
+            Restricted to verified administrator: <strong>{AUTHORIZED_ADMIN_EMAIL}</strong>.
+            Sign in with your verified Supabase Admin credentials to review, revise, and approve client deliverables.
+          </p>
 
           {authError && (
             <div className="admin-error-banner" role="alert">
@@ -251,12 +299,12 @@ export default function AdminPortal() {
 
           <form onSubmit={handleSignIn}>
             <div className="admin-field">
-              <label htmlFor="admin-email">Admin Email</label>
+              <label htmlFor="admin-email">Admin Email (Allowlisted)</label>
               <input
                 id="admin-email"
                 type="email"
                 required
-                placeholder="admin@orynex.studio"
+                placeholder={AUTHORIZED_ADMIN_EMAIL}
                 value={credentials.email}
                 onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
               />
@@ -275,13 +323,18 @@ export default function AdminPortal() {
             </div>
 
             <button type="submit" className="admin-btn" style={{ width: '100%', marginTop: '8px' }} disabled={authLoading}>
-              {authLoading ? 'Verifying...' : 'Sign In to Portal'}
+              {authLoading ? 'Verifying Authorization...' : 'Sign In to Admin Portal'}
             </button>
           </form>
         </div>
       </div>
     )
   }
+
+  const activeDraftObj = selectedJob?.edited_draft || selectedJob?.generated_draft || {}
+  const revisionsList = selectedJob?.revisions || []
+  const decisionsList = selectedJob?.decisions || []
+  const deliveryLogsList = selectedJob?.delivery_logs || []
 
   return (
     <div className="admin-viewport">
@@ -293,7 +346,7 @@ export default function AdminPortal() {
 
         <div className="admin-auth-info">
           <span>
-            Logged in as <strong>{currentUser?.email || 'Administrator'}</strong>
+            Logged in as <strong>{currentUser?.email || AUTHORIZED_ADMIN_EMAIL}</strong>
           </span>
           <button type="button" className="admin-btn admin-btn--secondary" onClick={handleSignOut}>
             Sign Out
@@ -365,8 +418,9 @@ export default function AdminPortal() {
               <div className="admin-job-client">
                 {job.leads?.name || 'Inquiry'} &bull; {job.leads?.email}
               </div>
-              <div style={{ fontSize: 11, color: 'var(--ink-faint)' }}>
-                {new Date(job.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} &bull; Model: {job.model || 'gemini-3.8-flash'}
+              <div style={{ fontSize: 11, color: 'var(--ink-faint)', display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                <span>Rev {job.revision_count || 1}</span>
+                <span>{new Date(job.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
               </div>
             </div>
           ))}
@@ -376,9 +430,9 @@ export default function AdminPortal() {
         <main className="admin-detail-panel">
           {selectedJob ? (
             <>
-              {/* Section 1: Client Brief */}
+              {/* Client Brief & Metadata Header */}
               <div className="admin-detail-section">
-                <h3>Client Brief & Metadata</h3>
+                <h3>Client Brief & Pipeline State</h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, fontSize: 13 }}>
                   <div>
                     <span style={{ color: 'var(--ink-faint)' }}>Client:</span>{' '}
@@ -395,7 +449,17 @@ export default function AdminPortal() {
                     <strong>{selectedJob.service}</strong>
                   </div>
                   <div>
-                    <span style={{ color: 'var(--ink-faint)' }}>Delivery Status:</span>{' '}
+                    <span style={{ color: 'var(--ink-faint)' }}>Revision:</span>{' '}
+                    <strong>Revision {selectedJob.revision_count || 1} of {selectedJob.max_revisions || 5}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--ink-faint)' }}>Pipeline Status:</span>{' '}
+                    <span className={`admin-status-badge admin-status--${selectedJob.status}`}>
+                      {selectedJob.status.replace('_', ' ')}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: 'var(--ink-faint)' }}>Delivery:</span>{' '}
                     <strong>{selectedJob.delivery_status}</strong>
                   </div>
                 </div>
@@ -410,47 +474,257 @@ export default function AdminPortal() {
                 </div>
               </div>
 
-              {/* Section 2: AI Draft Inspection & Edit */}
-              <div className="admin-detail-section">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <h3 style={{ margin: 0 }}>Generated Draft Deliverable (JSON)</h3>
-                  <span style={{ fontSize: 11, color: 'var(--ink-faint)' }}>
-                    {selectedJob.status === 'review_pending' ? 'Ready for Admin Approval' : `Status: ${selectedJob.status}`}
-                  </span>
-                </div>
-
-                <div className="admin-field">
-                  <label htmlFor="draft-editor">Editable Structured Output (Valid JSON Required):</label>
-                  <textarea
-                    id="draft-editor"
-                    className="admin-json-viewer"
-                    rows={14}
-                    value={draftJsonText}
-                    onChange={(e) => setDraftJsonText(e.target.value)}
-                  />
-                </div>
-
-                <div className="admin-field" style={{ marginTop: 12 }}>
-                  <label htmlFor="review-notes">Admin Review Notes / Audit Log:</label>
-                  <input
-                    id="review-notes"
-                    type="text"
-                    placeholder="e.g., Reviewed system requirements; refined technology choices."
-                    value={reviewNotes}
-                    onChange={(e) => setReviewNotes(e.target.value)}
-                  />
-                </div>
+              {/* Navigation Tabs */}
+              <div className="admin-tabs">
+                <button
+                  type="button"
+                  className={`admin-tab ${activeTab === 'proposal' ? 'admin-tab--active' : ''}`}
+                  onClick={() => setActiveTab('proposal')}
+                >
+                  Active Proposal (Rev {selectedJob.revision_count || 1})
+                </button>
+                <button
+                  type="button"
+                  className={`admin-tab ${activeTab === 'revisions' ? 'admin-tab--active' : ''}`}
+                  onClick={() => setActiveTab('revisions')}
+                >
+                  Revision History ({revisionsList.length})
+                </button>
+                <button
+                  type="button"
+                  className={`admin-tab ${activeTab === 'decisions' ? 'admin-tab--active' : ''}`}
+                  onClick={() => setActiveTab('decisions')}
+                >
+                  Review Audit Log ({decisionsList.length})
+                </button>
+                <button
+                  type="button"
+                  className={`admin-tab ${activeTab === 'delivery' ? 'admin-tab--active' : ''}`}
+                  onClick={() => setActiveTab('delivery')}
+                >
+                  Delivery Outbox ({deliveryLogsList.length})
+                </button>
               </div>
 
-              {/* Section 3: Action Controls */}
+              {/* Tab 1: Active Proposal & Editable JSON */}
+              {activeTab === 'proposal' && (
+                <div className="admin-detail-section">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <h3 style={{ margin: 0 }}>Proposal Deliverable Specification</h3>
+                    <span style={{ fontSize: 12, color: 'var(--flame-lit)' }}>
+                      Model: {selectedJob.model || 'gemini-3.8-flash'}
+                    </span>
+                  </div>
+
+                  {activeDraftObj.needs_clarification && (
+                    <div style={{ background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)', padding: 12, borderRadius: 6, marginBottom: 14 }}>
+                      <strong style={{ color: '#fde047' }}>Notice: Requires Client Clarification</strong>
+                      <p style={{ margin: '4px 0 0', fontSize: 13, color: '#fef08a' }}>
+                        The AI determined that the customer brief is underspecified. Scoping questions have been generated instead of fabricating requirements.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="admin-field">
+                    <label htmlFor="draft-editor">Editable Structured JSON Deliverable:</label>
+                    <textarea
+                      id="draft-editor"
+                      className="admin-json-viewer"
+                      rows={14}
+                      value={draftJsonText}
+                      onChange={(e) => setDraftJsonText(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="admin-field" style={{ marginTop: 12 }}>
+                    <label htmlFor="review-notes">Admin Review Notes / Audit Memo:</label>
+                    <input
+                      id="review-notes"
+                      type="text"
+                      placeholder="e.g. Verified architecture plan; refined component specifications."
+                      value={reviewNotes}
+                      onChange={(e) => setReviewNotes(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 2: Revision History */}
+              {activeTab === 'revisions' && (
+                <div className="admin-detail-section">
+                  <h3>All Proposal Revisions ({revisionsList.length})</h3>
+                  {revisionsList.length === 0 ? (
+                    <p style={{ fontSize: 13, color: 'var(--ink-soft)' }}>
+                      No archived revisions recorded yet for this job.
+                    </p>
+                  ) : (
+                    revisionsList.map((rev) => (
+                      <div key={rev.id || rev.revision_number} className="admin-history-item">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <strong style={{ color: 'var(--flame-lit)' }}>Revision {rev.revision_number}</strong>
+                          <span style={{ fontSize: 11, color: 'var(--ink-faint)' }}>
+                            {new Date(rev.created_at).toLocaleString()} &bull; {rev.model} ({rev.complexity})
+                          </span>
+                        </div>
+                        {rev.refined_instructions && (
+                          <p style={{ fontSize: 12, color: '#93c5fd', margin: '4px 0 8px' }}>
+                            <strong>Admin Directives:</strong> {rev.refined_instructions}
+                          </p>
+                        )}
+                        {rev.critique_notes && (
+                          <p style={{ fontSize: 12, color: '#86efac', margin: '4px 0 8px' }}>
+                            <strong>Critique Notes:</strong> {rev.critique_notes}
+                          </p>
+                        )}
+                        <pre className="admin-json-viewer" style={{ maxHeight: 150, margin: '6px 0 0' }}>
+                          <code>{JSON.stringify(rev.draft, null, 2)}</code>
+                        </pre>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Tab 3: Review Audit Decisions */}
+              {activeTab === 'decisions' && (
+                <div className="admin-detail-section">
+                  <h3>Administrator Decision History ({decisionsList.length})</h3>
+                  {decisionsList.length === 0 ? (
+                    <p style={{ fontSize: 13, color: 'var(--ink-soft)' }}>No review decisions logged yet.</p>
+                  ) : (
+                    decisionsList.map((dec) => (
+                      <div key={dec.id} className="admin-history-item">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span className={`admin-status-badge admin-status--${dec.action === 'approve' ? 'approved' : 'queued'}`}>
+                            {dec.action.toUpperCase()}
+                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--ink-faint)' }}>
+                            {new Date(dec.created_at).toLocaleString()} by {dec.reviewed_by_email}
+                          </span>
+                        </div>
+                        <p style={{ fontSize: 13, margin: '6px 0 0', color: 'var(--ink-soft)' }}>
+                          <strong>Notes/Feedback:</strong> {dec.feedback || 'No remarks entered'}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Tab 4: Delivery Outbox & Safe Retries */}
+              {activeTab === 'delivery' && (
+                <div className="admin-detail-section">
+                  <h3>Client Delivery Outbox Status</h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, fontSize: 13, marginBottom: 16 }}>
+                    <div>
+                      <span style={{ color: 'var(--ink-faint)' }}>Delivery Status:</span>{' '}
+                      <strong>{selectedJob.delivery_status}</strong>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--ink-faint)' }}>Resend ID:</span>{' '}
+                      <code>{selectedJob.delivery_resend_id || 'None'}</code>
+                    </div>
+                    <div>
+                      <span style={{ color: 'var(--ink-faint)' }}>Attempts:</span>{' '}
+                      <strong>{selectedJob.delivery_attempts || 0}</strong>
+                    </div>
+                  </div>
+
+                  {selectedJob.delivery_error && (
+                    <div className="admin-error-banner" style={{ margin: '0 0 16px' }}>
+                      <strong>Delivery Notice:</strong> {selectedJob.delivery_error}
+                    </div>
+                  )}
+
+                  {selectedJob.delivery_status === 'failed' && (
+                    <div style={{ marginBottom: 16 }}>
+                      <button
+                        type="button"
+                        className="admin-btn"
+                        onClick={() => handleAdminAction('retry_delivery')}
+                        disabled={actionLoading}
+                      >
+                        {actionLoading ? 'Retrying Dispatch...' : 'Retry Client Email Delivery'}
+                      </button>
+                    </div>
+                  )}
+
+                  <h4 style={{ fontSize: 12, textTransform: 'uppercase', color: 'var(--ink-faint)', marginTop: 16 }}>
+                    Delivery Dispatches Log ({deliveryLogsList.length})
+                  </h4>
+                  {deliveryLogsList.length === 0 ? (
+                    <p style={{ fontSize: 12, color: 'var(--ink-soft)' }}>No dispatches recorded.</p>
+                  ) : (
+                    deliveryLogsList.map((log) => (
+                      <div key={log.id} className="admin-history-item">
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span className={`admin-status-badge admin-status--${log.status === 'success' ? 'approved' : 'failed'}`}>
+                            {log.status.toUpperCase()}
+                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--ink-faint)' }}>
+                            {new Date(log.created_at).toLocaleString()}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, marginTop: 4 }}>
+                          Recipient: <strong>{log.recipient}</strong> {log.resend_id && `(ID: ${log.resend_id})`}
+                        </div>
+                        {log.error && <p style={{ fontSize: 12, color: '#fca5a5', margin: '4px 0 0' }}>{log.error}</p>}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Revision Feedback Input Section */}
+              {showRevisionModal && (
+                <div className="admin-feedback-box">
+                  <h4 style={{ margin: '0 0 8px', color: 'var(--flame-lit)', fontSize: 13, textTransform: 'uppercase' }}>
+                    Request AI Revision (Revision {(selectedJob.revision_count || 1) + 1} of {selectedJob.max_revisions || 5})
+                  </h4>
+                  <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--ink-soft)' }}>
+                    Provide mandatory instructions specifying architectural changes, omissions, or refinements. The AI worker will build a refined prompt incorporating this feedback.
+                  </p>
+                  <textarea
+                    rows={4}
+                    className="admin-json-viewer"
+                    style={{ width: '100%', marginBottom: 10 }}
+                    placeholder="Enter concrete revision directives (minimum 5 characters)..."
+                    value={revisionFeedback}
+                    onChange={(e) => setRevisionFeedback(e.target.value)}
+                  />
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button
+                      type="button"
+                      className="admin-btn"
+                      onClick={() => handleAdminAction('request_revision')}
+                      disabled={actionLoading || revisionFeedback.trim().length < 5}
+                    >
+                      {actionLoading ? 'Enqueuing Revision...' : 'Submit Revision Request'}
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn--secondary"
+                      onClick={() => setShowRevisionModal(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Controls Bar */}
               <div className="admin-actions-bar">
                 <button
                   type="button"
                   className="admin-btn"
                   onClick={() => handleAdminAction('approve_and_deliver')}
-                  disabled={actionLoading || selectedJob.delivery_status === 'sent'}
+                  disabled={actionLoading || selectedJob.status !== 'review_pending' || selectedJob.delivery_status === 'sent'}
                 >
-                  {selectedJob.delivery_status === 'sent' ? 'Delivered to Client' : 'Approve & Deliver to Client'}
+                  {selectedJob.delivery_status === 'sent'
+                    ? 'Delivered to Client'
+                    : selectedJob.status !== 'review_pending'
+                    ? `Cannot Approve (${selectedJob.status.replace('_', ' ')})`
+                    : `Approve Rev ${selectedJob.revision_count || 1} & Deliver`}
                 </button>
 
                 <button
@@ -465,11 +739,24 @@ export default function AdminPortal() {
                 <button
                   type="button"
                   className="admin-btn admin-btn--secondary"
-                  onClick={() => handleAdminAction('regenerate_job')}
-                  disabled={actionLoading}
+                  onClick={() => setShowRevisionModal(!showRevisionModal)}
+                  disabled={actionLoading || (selectedJob.revision_count || 1) >= (selectedJob.max_revisions || 5)}
                 >
-                  Regenerate Draft
+                  {(selectedJob.revision_count || 1) >= (selectedJob.max_revisions || 5)
+                    ? 'Max Revisions Reached'
+                    : 'Request AI Revision'}
                 </button>
+
+                {selectedJob.delivery_status === 'failed' && (
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn--secondary"
+                    onClick={() => handleAdminAction('retry_delivery')}
+                    disabled={actionLoading}
+                  >
+                    Retry Delivery
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -477,7 +764,7 @@ export default function AdminPortal() {
                   onClick={() => handleAdminAction('reject_job')}
                   disabled={actionLoading || selectedJob.status === 'rejected'}
                 >
-                  Reject Job
+                  Reject Request Permanently
                 </button>
               </div>
             </>

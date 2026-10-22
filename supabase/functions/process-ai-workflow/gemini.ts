@@ -11,6 +11,9 @@ export interface GeminiCallOptions {
   clientEmail: string
   briefText: string
   modelOverride?: string
+  customUserPrompt?: string
+  customSystemInstruction?: string
+  refinedInstructions?: string
 }
 
 export interface GeminiCallResult {
@@ -28,7 +31,7 @@ const REQUEST_TIMEOUT_MS = 35000 // 35 seconds
 export async function callGeminiServiceWorkflow(
   options: GeminiCallOptions
 ): Promise<GeminiCallResult> {
-  const { service, clientName, clientEmail, briefText, modelOverride } = options
+  const { service, clientName, clientEmail, briefText, modelOverride, customUserPrompt, customSystemInstruction, refinedInstructions } = options
   const model = modelOverride || Deno.env.get('GEMINI_MODEL') || DEFAULT_MODEL
   const apiKey = Deno.env.get('GEMINI_API_KEY')
   const isMock = Deno.env.get('MOCK_GEMINI') === 'true' || !apiKey
@@ -45,8 +48,13 @@ export async function callGeminiServiceWorkflow(
 
   // Sanitize and cap untrusted client input before snapshotting
   const sanitizedBrief = (briefText || '').slice(0, 2000).trim()
-  const userPrompt = promptDef.userPromptTemplate(clientName, clientEmail, sanitizedBrief)
-  const promptSnapshot = `[System]: ${promptDef.systemInstruction.slice(0, 300)}...\n[User Prompt]: ${userPrompt.slice(0, 500)}...`
+  let userPrompt = customUserPrompt || promptDef.userPromptTemplate(clientName, clientEmail, sanitizedBrief)
+  if (refinedInstructions) {
+    userPrompt += `\n\n[ADMINISTRATOR REVISION FEEDBACK & REQUIREMENTS]:\n${refinedInstructions}\n\nPlease revise the deliverable to address all administrator feedback while maintaining high engineering and design quality.`
+  }
+
+  const systemInstructionText = customSystemInstruction || promptDef.systemInstruction
+  const promptSnapshot = `[System]: ${systemInstructionText.slice(0, 300)}...\n[User Prompt]: ${userPrompt.slice(0, 500)}...`
 
   // Offline Mock Mode for tests or pre-configuration
   if (isMock) {
@@ -60,19 +68,25 @@ export async function callGeminiServiceWorkflow(
     }
   }
 
-  const endpoint = 'https://generativelanguage.googleapis.com/v1beta/interactions'
+  // Official Google Gemini REST API endpoint
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
   try {
     const payload = {
-      model,
-      system_instruction: promptDef.systemInstruction,
-      input: userPrompt,
-      response_format: {
-        type: 'text',
-        mime_type: 'application/json',
-        schema: promptDef.jsonSchema,
+      system_instruction: {
+        parts: [{ text: systemInstructionText }],
+      },
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: userPrompt }],
+        },
+      ],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: promptDef.jsonSchema,
       },
     }
 
@@ -102,14 +116,14 @@ export async function callGeminiServiceWorkflow(
     }
 
     const responseJson = await response.json()
-    // Output text extraction from Interactions API
+    // Output text extraction from official generateContent API (with fallback compatibility)
     let rawText: string | null = null
-    if (responseJson.output_text) {
+    if (responseJson.candidates?.[0]?.content?.parts?.[0]?.text) {
+      rawText = responseJson.candidates[0].content.parts[0].text
+    } else if (responseJson.output_text) {
       rawText = responseJson.output_text
     } else if (Array.isArray(responseJson.outputs) && responseJson.outputs.length > 0) {
       rawText = responseJson.outputs[responseJson.outputs.length - 1].text
-    } else if (responseJson.candidates?.[0]?.content?.parts?.[0]?.text) {
-      rawText = responseJson.candidates[0].content.parts[0].text
     }
 
     if (!rawText) {

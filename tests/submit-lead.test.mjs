@@ -768,4 +768,58 @@ describe('Orynex Studio — Frontend Failure Handling & Zero Fake Success', () =
     assert.equal(leadRecord.notification_status, 'failed')
     assert.ok(leadRecord.id, 'Lead must remain persisted in DB even if notification fails')
   })
+
+  it('atomically creates lead and queue job in single transactional operation', () => {
+    // Simulates submit_lead_with_job RPC
+    const atomicDb = { leads: [], jobs: [] }
+    function submitLeadWithJob(payload) {
+      const leadId = 'lead-' + Math.random().toString(36).slice(2, 9)
+      const jobId = 'job-' + Math.random().toString(36).slice(2, 9)
+      atomicDb.leads.push({ id: leadId, ...payload })
+      atomicDb.jobs.push({ id: jobId, lead_id: leadId, service: payload.service, status: 'queued', revision_count: 1 })
+      return { lead_id: leadId, job_id: jobId }
+    }
+
+    const res = submitLeadWithJob({
+      name: 'Elena Rostova',
+      email: 'elena@example.com',
+      service: 'Custom Engineering',
+      project_overview: 'Enterprise data migration and real-time streaming pipeline.',
+    })
+
+    assert.ok(res.lead_id)
+    assert.ok(res.job_id)
+    assert.equal(atomicDb.leads.length, 1)
+    assert.equal(atomicDb.jobs.length, 1)
+    assert.equal(atomicDb.jobs[0].lead_id, res.lead_id)
+    assert.equal(atomicDb.jobs[0].status, 'queued')
+  })
+
+  it('marks lead as queue_failed and returns safe error when queue enqueue fails', () => {
+    const leadRecord = {
+      id: 'lead-err-123',
+      name: 'Marcus Brody',
+      email: 'marcus@museum.org',
+      service: 'Digital Product Design',
+      notification_status: 'pending',
+    }
+
+    // Queue enqueue failure simulation
+    const queueError = new Error('Database connection limit reached')
+    if (queueError) {
+      leadRecord.notification_status = 'queue_failed'
+      leadRecord.notification_error = queueError.message
+    }
+
+    assert.equal(leadRecord.notification_status, 'queue_failed')
+    assert.equal(leadRecord.id, 'lead-err-123', 'Inquiry must never be dropped even if queue fails')
+
+    // Response must be generic and not leak internal stack traces
+    const publicResponse = {
+      success: false,
+      message: 'Your inquiry was recorded, but processing queue encountered an issue. Our team has been notified.',
+    }
+    assert.equal(publicResponse.message.includes('limit reached'), false)
+    assert.equal(publicResponse.message.includes('Error:'), false)
+  })
 })

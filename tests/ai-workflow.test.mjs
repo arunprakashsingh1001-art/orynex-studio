@@ -213,19 +213,94 @@ class DurableQueueSimulator {
 
 // 4. Admin Auth & Delivery Authorization Simulator
 class AdminWorkflowSimulator {
-  constructor(adminUsers) {
+  constructor(adminUsers, authorizedEmail = 'arunprakashsingh1001@gmail.com') {
     this.adminUsers = new Set(adminUsers) // Authorized user IDs
+    this.authorizedEmail = authorizedEmail.toLowerCase()
     this.deliveryLogs = []
+    this.revisions = []
+    this.decisions = []
   }
 
   verifyAuth(tokenUser) {
     if (!tokenUser || !tokenUser.id) {
       return { authorized: false, status: 401, error: 'Unauthorized: missing authentication' }
     }
+    const email = (tokenUser.email || '').toLowerCase().trim()
+    if (email !== this.authorizedEmail) {
+      return { authorized: false, status: 403, error: 'Forbidden: email not on single-administrator allowlist' }
+    }
     if (!this.adminUsers.has(tokenUser.id)) {
-      return { authorized: false, status: 403, error: 'Forbidden: not an authorized admin' }
+      return { authorized: false, status: 403, error: 'Forbidden: not registered in admin_users' }
     }
     return { authorized: true, status: 200 }
+  }
+
+  editDraft(job, adminUser, editedDraft, notes = '') {
+    const authCheck = this.verifyAuth(adminUser)
+    if (!authCheck.authorized) return authCheck
+
+    if (!editedDraft || typeof editedDraft !== 'object') {
+      return { authorized: true, success: false, status: 400, error: 'Invalid edited_draft' }
+    }
+
+    job.edited_draft = editedDraft
+    job.review_notes = notes
+    job.reviewed_by = adminUser.id
+
+    this.decisions.push({
+      job_id: job.id,
+      revision_number: job.revision_count || 1,
+      action: 'edit_draft',
+      feedback: notes,
+      reviewed_by: adminUser.id,
+      reviewed_by_email: adminUser.email,
+    })
+
+    return { authorized: true, success: true, status: 200 }
+  }
+
+  requestRevision(job, adminUser, feedback) {
+    const authCheck = this.verifyAuth(adminUser)
+    if (!authCheck.authorized) return authCheck
+
+    const trimmed = (feedback || '').trim()
+    if (trimmed.length < 5) {
+      return { authorized: true, success: false, status: 422, error: 'Mandatory revision feedback is required (min 5 chars)' }
+    }
+
+    const currentRev = job.revision_count || 1
+    const maxRev = job.max_revisions || 5
+    if (currentRev >= maxRev) {
+      return { authorized: true, success: false, status: 422, error: `Maximum revision limit reached (${maxRev})` }
+    }
+
+    // Archive current draft in revisions history before incrementing
+    this.revisions.push({
+      job_id: job.id,
+      revision_number: currentRev,
+      draft: job.edited_draft || job.generated_draft,
+      refined_instructions: job.refined_instructions,
+      model: job.model || 'gemini-3.8-flash',
+    })
+
+    // Record decision
+    this.decisions.push({
+      job_id: job.id,
+      revision_number: currentRev,
+      action: 'request_revision',
+      feedback: trimmed,
+      reviewed_by: adminUser.id,
+      reviewed_by_email: adminUser.email,
+    })
+
+    // Enqueue revision N+1
+    job.revision_count = currentRev + 1
+    job.refined_instructions = trimmed
+    job.review_notes = trimmed
+    job.status = 'queued'
+    job.delivery_status = 'not_started'
+
+    return { authorized: true, success: true, status: 200, next_revision: job.revision_count }
   }
 
   approveAndDeliver(job, adminUser, mockResendSuccess = true) {
@@ -233,12 +308,7 @@ class AdminWorkflowSimulator {
     if (!authCheck.authorized) return authCheck
 
     // Strict Delivery Safeguards:
-    // 1. Must be in review_pending (or approved) with a draft
-    if (!job.generated_draft && !job.edited_draft) {
-      return { authorized: true, success: false, status: 422, error: 'Cannot approve job without draft' }
-    }
-
-    // 2. Idempotency: Prevent duplicate deliveries
+    // 1. Idempotency: Prevent duplicate deliveries if already sent
     if (job.delivery_status === 'sent') {
       return {
         authorized: true,
@@ -249,11 +319,35 @@ class AdminWorkflowSimulator {
       }
     }
 
-    // 3. Mark approved
+    // 2. Must be awaiting review (review_pending)
+    if (job.status !== 'review_pending') {
+      return { authorized: true, success: false, status: 422, error: `Cannot approve job in ${job.status} state` }
+    }
+
+    const activeDraft = job.edited_draft || job.generated_draft
+    if (!activeDraft) {
+      return { authorized: true, success: false, status: 422, error: 'Cannot approve job without draft' }
+    }
+
+    // 3. Mark approved and bind immutable snapshot & revision
+    const currentRev = job.revision_count || 1
     job.status = 'approved'
+    job.delivery_status = 'pending'
+    job.approved_revision = currentRev
+    job.approved_snapshot = JSON.parse(JSON.stringify(activeDraft))
     job.reviewed_by = adminUser.id
 
-    // 4. Dispatch Email
+    this.decisions.push({
+      job_id: job.id,
+      revision_number: currentRev,
+      action: 'approve',
+      feedback: job.review_notes || 'Approved',
+      reviewed_by: adminUser.id,
+      reviewed_by_email: adminUser.email,
+      draft_snapshot: job.approved_snapshot,
+    })
+
+    // 4. Dispatch Email with approved snapshot ONLY
     if (mockResendSuccess) {
       const resendId = `resend_${crypto.randomUUID().slice(0, 10)}`
       job.delivery_status = 'sent'
@@ -262,24 +356,69 @@ class AdminWorkflowSimulator {
 
       this.deliveryLogs.push({
         job_id: job.id,
+        recipient: job.email || 'client@example.com',
         status: 'success',
         resend_id: resendId,
+        payload_snapshot: job.approved_snapshot,
         delivered_at: Date.now(),
       })
 
-      return { authorized: true, success: true, status: 200, resend_id: resendId }
+      return { authorized: true, success: true, status: 200, resend_id: resendId, approved_revision: currentRev }
     } else {
       job.delivery_status = 'failed'
       job.delivery_error = 'Resend HTTP 500 error'
 
       this.deliveryLogs.push({
         job_id: job.id,
+        recipient: job.email || 'client@example.com',
         status: 'failed',
         error: 'Resend HTTP 500 error',
+        payload_snapshot: job.approved_snapshot,
         delivered_at: Date.now(),
       })
 
       return { authorized: true, success: false, status: 502, error: 'Delivery email failed to dispatch' }
+    }
+  }
+
+  retryDelivery(job, adminUser, mockResendSuccess = true) {
+    const authCheck = this.verifyAuth(adminUser)
+    if (!authCheck.authorized) return authCheck
+
+    if (job.delivery_status === 'sent') {
+      return { authorized: true, success: false, status: 409, error: 'Duplicate delivery prevented: already sent' }
+    }
+
+    if (job.status !== 'approved' && job.status !== 'delivered') {
+      return { authorized: true, success: false, status: 422, error: 'Cannot retry unapproved job' }
+    }
+
+    const payload = job.approved_snapshot
+    if (!payload) {
+      return { authorized: true, success: false, status: 422, error: 'Missing approved snapshot' }
+    }
+
+    if (mockResendSuccess) {
+      const resendId = `resend_retry_${crypto.randomUUID().slice(0, 8)}`
+      job.delivery_status = 'sent'
+      job.delivery_resend_id = resendId
+      job.status = 'delivered'
+      job.delivery_error = null
+
+      this.deliveryLogs.push({
+        job_id: job.id,
+        recipient: job.email || 'client@example.com',
+        status: 'success',
+        resend_id: resendId,
+        payload_snapshot: payload,
+        delivered_at: Date.now(),
+      })
+
+      return { authorized: true, success: true, status: 200, resend_id: resendId }
+    } else {
+      job.delivery_status = 'failed'
+      job.delivery_error = 'Resend connection timeout'
+      return { authorized: true, success: false, status: 502, error: 'Resend connection timeout' }
     }
   }
 }
@@ -486,7 +625,7 @@ describe('Orynex Studio — AI Handling of Vague Requirements & Clarification Gu
     // Unauthorized attempt blocked
     const unauthorizedAttempt = adminSimulator.approveAndDeliver(
       jobWithClarification,
-      { id: 'non-admin-user' },
+      { id: 'non-admin-user', email: 'intruder@example.com' },
       true
     )
     assert.equal(unauthorizedAttempt.authorized, false)
@@ -496,7 +635,7 @@ describe('Orynex Studio — AI Handling of Vague Requirements & Clarification Gu
     // Authorized admin explicitly approves
     const authorizedApproval = adminSimulator.approveAndDeliver(
       jobWithClarification,
-      { id: 'admin-uuid-1' },
+      { id: 'admin-uuid-1', email: 'arunprakashsingh1001@gmail.com' },
       true
     )
     assert.equal(authorizedApproval.authorized, true)
@@ -617,7 +756,8 @@ describe('Orynex Studio — Durable Queue & Concurrency Orchestration', () => {
 })
 
 describe('Orynex Studio — Admin Authorization & Delivery Safeguards', () => {
-  const adminSimulator = new AdminWorkflowSimulator(['admin-uuid-1', 'superadmin-uuid-2'])
+  const authorizedEmail = 'arunprakashsingh1001@gmail.com'
+  const adminSimulator = new AdminWorkflowSimulator(['admin-uuid-1', 'superadmin-uuid-2'], authorizedEmail)
 
   it('strictly rejects unauthenticated requests (HTTP 401)', () => {
     const auth = adminSimulator.verifyAuth(null)
@@ -626,17 +766,93 @@ describe('Orynex Studio — Admin Authorization & Delivery Safeguards', () => {
   })
 
   it('strictly rejects non-admin authenticated users not in admin_users table (HTTP 403)', () => {
-    const normalUser = { id: 'regular-user-uuid-999', email: 'user@example.com' }
+    const normalUser = { id: 'regular-user-uuid-999', email: authorizedEmail }
     const auth = adminSimulator.verifyAuth(normalUser)
     assert.equal(auth.authorized, false)
     assert.equal(auth.status, 403)
   })
 
-  it('authorizes registered administrators (HTTP 200)', () => {
-    const adminUser = { id: 'admin-uuid-1', email: 'admin@orynex.studio' }
+  it('strictly rejects authenticated users whose email is not on the single-admin allowlist (HTTP 403)', () => {
+    const wrongEmailAdmin = { id: 'admin-uuid-1', email: 'intruder@example.com' }
+    const auth = adminSimulator.verifyAuth(wrongEmailAdmin)
+    assert.equal(auth.authorized, false)
+    assert.equal(auth.status, 403)
+    assert.ok(auth.error.includes('single-administrator allowlist'))
+  })
+
+  it('authorizes registered single administrator (HTTP 200)', () => {
+    const adminUser = { id: 'admin-uuid-1', email: authorizedEmail }
     const auth = adminSimulator.verifyAuth(adminUser)
     assert.equal(auth.authorized, true)
     assert.equal(auth.status, 200)
+  })
+
+  it('allows administrator to edit draft and logs edit decision in audit table', () => {
+    const adminUser = { id: 'admin-uuid-1', email: authorizedEmail }
+    const job = {
+      id: 'job-edit-1',
+      status: 'review_pending',
+      generated_draft: { executiveSummary: 'Original AI draft' },
+      revision_count: 1,
+    }
+
+    const editRes = adminSimulator.editDraft(job, adminUser, { executiveSummary: 'Edited draft with refined terms' }, 'Updated pricing model')
+    assert.equal(editRes.success, true)
+    assert.equal(job.edited_draft.executiveSummary, 'Edited draft with refined terms')
+    assert.equal(job.review_notes, 'Updated pricing model')
+
+    // Verify decision audit entry
+    const decision = adminSimulator.decisions.find((d) => d.job_id === job.id && d.action === 'edit_draft')
+    assert.ok(decision)
+    assert.equal(decision.feedback, 'Updated pricing model')
+    assert.equal(decision.reviewed_by, adminUser.id)
+  })
+
+  it('requires mandatory feedback (min 5 chars) when requesting revision and resets job state', () => {
+    const adminUser = { id: 'admin-uuid-1', email: authorizedEmail }
+    const job = {
+      id: 'job-rev-1',
+      status: 'review_pending',
+      generated_draft: { summary: 'Vague proposal' },
+      revision_count: 1,
+      max_revisions: 5,
+    }
+
+    // Attempt with empty or too short feedback
+    const failRes = adminSimulator.requestRevision(job, adminUser, 'bad')
+    assert.equal(failRes.success, false)
+    assert.equal(failRes.status, 422)
+    assert.ok(failRes.error.includes('Mandatory revision feedback is required'))
+
+    // Valid revision request
+    const successRes = adminSimulator.requestRevision(job, adminUser, 'Please expand the technical architecture and SLA section')
+    assert.equal(successRes.success, true)
+    assert.equal(successRes.next_revision, 2)
+    assert.equal(job.revision_count, 2)
+    assert.equal(job.status, 'queued')
+    assert.equal(job.delivery_status, 'not_started')
+    assert.equal(job.refined_instructions, 'Please expand the technical architecture and SLA section')
+
+    // Archived in revisions table
+    const archived = adminSimulator.revisions.find((r) => r.job_id === job.id && r.revision_number === 1)
+    assert.ok(archived)
+    assert.equal(archived.draft.summary, 'Vague proposal')
+  })
+
+  it('enforces maximum revision limit when requesting revisions', () => {
+    const adminUser = { id: 'admin-uuid-1', email: authorizedEmail }
+    const job = {
+      id: 'job-rev-max',
+      status: 'review_pending',
+      generated_draft: { summary: 'Draft at limit' },
+      revision_count: 5,
+      max_revisions: 5,
+    }
+
+    const res = adminSimulator.requestRevision(job, adminUser, 'Try one more time please')
+    assert.equal(res.success, false)
+    assert.equal(res.status, 422)
+    assert.ok(res.error.includes('Maximum revision limit reached'))
   })
 
   it('PREVENTS client delivery if job is not yet approved by admin', () => {
@@ -653,11 +869,12 @@ describe('Orynex Studio — Admin Authorization & Delivery Safeguards', () => {
   })
 
   it('dispatches client delivery ONLY upon explicit admin approval and logs outcome', () => {
-    const adminUser = { id: 'admin-uuid-1', email: 'admin@orynex.studio' }
+    const adminUser = { id: 'admin-uuid-1', email: authorizedEmail }
     const job = {
       id: 'job-to-approve',
       status: 'review_pending',
       delivery_status: 'not_started',
+      revision_count: 2,
       generated_draft: { summary: 'Approved Proposal' },
     }
 
@@ -668,15 +885,18 @@ describe('Orynex Studio — Admin Authorization & Delivery Safeguards', () => {
     assert.ok(result.resend_id)
     assert.equal(job.status, 'delivered')
     assert.equal(job.delivery_status, 'sent')
+    assert.equal(job.approved_revision, 2)
+    assert.deepEqual(job.approved_snapshot, { summary: 'Approved Proposal' })
 
     // Audit log entry verified
     const log = adminSimulator.deliveryLogs.find((l) => l.job_id === job.id)
     assert.ok(log)
     assert.equal(log.status, 'success')
+    assert.deepEqual(log.payload_snapshot, { summary: 'Approved Proposal' })
   })
 
   it('enforces idempotency: prevents duplicate client delivery if already sent (HTTP 409)', () => {
-    const adminUser = { id: 'admin-uuid-1', email: 'admin@orynex.studio' }
+    const adminUser = { id: 'admin-uuid-1', email: authorizedEmail }
     const alreadySentJob = {
       id: 'job-sent',
       status: 'delivered',
@@ -689,6 +909,31 @@ describe('Orynex Studio — Admin Authorization & Delivery Safeguards', () => {
     assert.equal(result.success, false)
     assert.equal(result.status, 409)
     assert.ok(result.error.includes('Duplicate delivery prevented'))
+  })
+
+  it('allows safe delivery retry on failed delivery using immutable approved_snapshot without altering draft', () => {
+    const adminUser = { id: 'admin-uuid-1', email: authorizedEmail }
+    const failedJob = {
+      id: 'job-failed-delivery',
+      status: 'approved',
+      delivery_status: 'failed',
+      delivery_error: 'Resend connection timeout',
+      approved_revision: 1,
+      approved_snapshot: { summary: 'Immutable approved deliverable' },
+      generated_draft: { summary: 'Later unapproved draft attempt' },
+    }
+
+    const retryRes = adminSimulator.retryDelivery(failedJob, adminUser, true)
+    assert.equal(retryRes.success, true)
+    assert.equal(retryRes.status, 200)
+    assert.equal(failedJob.status, 'delivered')
+    assert.equal(failedJob.delivery_status, 'sent')
+    assert.ok(retryRes.resend_id)
+
+    // Verify delivery payload was the locked approved_snapshot, not the unapproved draft
+    const retryLog = adminSimulator.deliveryLogs.find((l) => l.job_id === failedJob.id && l.status === 'success')
+    assert.ok(retryLog)
+    assert.deepEqual(retryLog.payload_snapshot, { summary: 'Immutable approved deliverable' })
   })
 })
 
@@ -704,11 +949,11 @@ describe('Orynex Studio — Gemini API Authentication & Header Security', () => 
       'Gemini API key must not be passed in the URL query string'
     )
 
-    // Endpoint must point to Interactions API without query string
+    // Endpoint must point to official Gemini generateContent API without query string
     assert.match(
       geminiSource,
-      /endpoint\s*=\s*'https:\/\/generativelanguage\.googleapis\.com\/v1beta\/interactions'/,
-      'Interactions endpoint should not contain query parameters'
+      /endpoint\s*=\s*`https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\/\${model}:generateContent`/,
+      'Official generateContent endpoint should not contain query parameters'
     )
 
     // Request headers must include x-goog-api-key
@@ -873,4 +1118,78 @@ describe('Orynex Studio — Edge Function Gateway & Worker Configuration', () =>
     )
   })
 })
+
+describe('Orynex Studio — Revisions, Audit & Scheduler Migrations Audit', () => {
+  const revMigrationPath = path.resolve('supabase/migrations/20261023000000_ai_revisions_and_audit.sql')
+  assert.ok(fs.existsSync(revMigrationPath), 'Migration 20261023000000_ai_revisions_and_audit.sql must exist')
+  const revMigrationSql = fs.readFileSync(revMigrationPath, 'utf-8')
+
+  it('hardens submit_lead_with_job with explicit search_path and revokes public execution', () => {
+    assert.match(
+      revMigrationSql,
+      /CREATE OR REPLACE FUNCTION public\.submit_lead_with_job[\s\S]*?SECURITY DEFINER[\s\S]*?SET search_path = ''/,
+      'submit_lead_with_job must declare SET search_path = \'\''
+    )
+    assert.match(
+      revMigrationSql,
+      /REVOKE ALL ON FUNCTION public\.submit_lead_with_job[\s\S]*?FROM PUBLIC/,
+      'submit_lead_with_job must revoke execute from PUBLIC'
+    )
+    assert.match(
+      revMigrationSql,
+      /GRANT EXECUTE ON FUNCTION public\.submit_lead_with_job[\s\S]*?TO service_role/,
+      'submit_lead_with_job must grant execute to service_role'
+    )
+  })
+
+  it('hardens approve_and_lock_revision with search_path and revokes unauthorized execution', () => {
+    assert.match(
+      revMigrationSql,
+      /CREATE OR REPLACE FUNCTION public\.approve_and_lock_revision[\s\S]*?SECURITY DEFINER[\s\S]*?SET search_path = ''/,
+      'approve_and_lock_revision must declare SET search_path = \'\''
+    )
+    assert.match(
+      revMigrationSql,
+      /REVOKE ALL ON FUNCTION public\.approve_and_lock_revision[\s\S]*?FROM PUBLIC/,
+      'approve_and_lock_revision must revoke execute from PUBLIC'
+    )
+    assert.match(
+      revMigrationSql,
+      /GRANT EXECUTE ON FUNCTION public\.approve_and_lock_revision[\s\S]*?TO service_role/,
+      'approve_and_lock_revision must grant execute to service_role'
+    )
+  })
+
+  it('enforces RLS and grants appropriate service_role access on audit tables', () => {
+    assert.match(
+      revMigrationSql,
+      /ALTER TABLE public\.ai_job_revisions ENABLE ROW LEVEL SECURITY;/,
+      'ai_job_revisions must enable RLS'
+    )
+    assert.match(
+      revMigrationSql,
+      /ALTER TABLE public\.ai_review_decisions ENABLE ROW LEVEL SECURITY;/,
+      'ai_review_decisions must enable RLS'
+    )
+    assert.match(
+      revMigrationSql,
+      /GRANT ALL ON TABLE public\.ai_job_revisions TO service_role;/,
+      'ai_job_revisions must grant ALL to service_role'
+    )
+    assert.match(
+      revMigrationSql,
+      /GRANT ALL ON TABLE public\.ai_review_decisions TO service_role;/,
+      'ai_review_decisions must grant ALL to service_role'
+    )
+  })
+
+  it('verifies scheduler migration exists and documents pg_cron/pg_net deployment', () => {
+    const schedPath = path.resolve('supabase/migrations/20261023000001_automated_worker_scheduler.sql')
+    assert.ok(fs.existsSync(schedPath), 'Migration 20261023000001_automated_worker_scheduler.sql must exist')
+    const schedSql = fs.readFileSync(schedPath, 'utf-8')
+    assert.match(schedSql, /cron\.schedule/, 'Scheduler migration should define pg_cron invocation schedule')
+    assert.match(schedSql, /net\.http_post/, 'Scheduler migration should invoke worker via pg_net')
+  })
+})
+
 
