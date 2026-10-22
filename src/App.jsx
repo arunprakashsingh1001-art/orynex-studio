@@ -12,7 +12,8 @@ export default function App() {
     return window.location.pathname === '/admin' || window.location.hash.startsWith('#/admin')
   })
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => {
-    return new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery'
+    const params = new URLSearchParams(window.location.hash.slice(1))
+    return params.get('type') === 'recovery' || params.has('error_code') || params.has('error_description')
   })
 
   useEffect(() => {
@@ -20,8 +21,9 @@ export default function App() {
       setIsAdminRoute(
         window.location.pathname === '/admin' || window.location.hash.startsWith('#/admin')
       )
+      const params = new URLSearchParams(window.location.hash.slice(1))
       setIsPasswordRecovery(
-        new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery'
+        params.get('type') === 'recovery' || params.has('error_code') || params.has('error_description')
       )
     }
 
