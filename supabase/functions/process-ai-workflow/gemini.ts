@@ -126,7 +126,8 @@ export async function callGeminiServiceWorkflow(
     const modelCandidates = Array.from(new Set([
       model,
       fallbackModel,
-      Deno.env.get('GEMINI_SECONDARY_FALLBACK_MODEL') || 'gemini-3.5-flash-lite',
+      Deno.env.get('GEMINI_SECONDARY_FALLBACK_MODEL') || 'gemini-4-argon',
+      Deno.env.get('GEMINI_TERTIARY_FALLBACK_MODEL') || 'gemini-3.5-flash-lite',
     ]))
     let response: Response | null = null
 
