@@ -26,7 +26,10 @@ Deno.serve(async (req: Request) => {
     })
   }
 
-  // 1. Verify caller authorization (must be service_role)
+  // 1. Verify caller authorization.
+  // The Supabase Edge gateway verifies the JWT signature because verify_jwt remains true.
+  // Here, also enforce the role claim without requiring the presented JWT to string-match
+  // the runtime's SUPABASE_SERVICE_ROLE_KEY value (which can differ from a rotated legacy key).
   const authHeader = req.headers.get('Authorization') || ''
   const token = authHeader.replace(/^Bearer\s+/i, '').trim()
   const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
@@ -39,10 +42,23 @@ Deno.serve(async (req: Request) => {
     )
   }
 
-  // Authorize only service_role key to prevent public execution of queue jobs
-  if (!token || token !== supabaseServiceKey) {
+  let tokenRole: string | null = null
+  try {
+    const payloadSegment = token.split('.')[1]
+    if (payloadSegment) {
+      const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/')
+      const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=')
+      const payload = JSON.parse(atob(padded)) as { role?: string }
+      tokenRole = payload.role || null
+    }
+  } catch {
+    tokenRole = null
+  }
+
+  // Only signed service_role JWTs pass: signature validation is enforced by the gateway above.
+  if (!token || tokenRole !== 'service_role') {
     return new Response(
-      JSON.stringify({ error: 'Unauthorized: worker execution requires service-role authorization' }),
+      JSON.stringify({ error: 'Unauthorized: worker execution requires a verified service_role JWT' }),
       { status: 401, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' } }
     )
   }
