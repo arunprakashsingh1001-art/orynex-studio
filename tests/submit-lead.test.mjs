@@ -66,6 +66,7 @@ const MAX_PAYLOAD_BYTES = 10 * 1024 // 10 KB
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://orynex.studio',
   'https://www.orynex.studio',
+  'https://orynexstudio-git-main-team-itachi.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
@@ -182,7 +183,7 @@ function createRateLimiter(maxRequests = 5, windowMs = 60000) {
 }
 
 // CORS Origin evaluation helper matching Edge Function behavior
-function evaluateCors(origin, method = 'POST') {
+function evaluateCors(origin, method = 'POST', responseStatus = 200) {
   const isAllowed = origin ? DEFAULT_ALLOWED_ORIGINS.includes(origin) : false
 
   if (method === 'OPTIONS') {
@@ -213,7 +214,7 @@ function evaluateCors(origin, method = 'POST') {
     headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, x-client-info, apikey'
     headers['Access-Control-Max-Age'] = '86400'
   }
-  return { status: 200, allowed: isAllowed, headers }
+  return { status: responseStatus, allowed: isAllowed, headers }
 }
 
 // Duplicate check helper matching Edge Function logic
@@ -560,8 +561,12 @@ describe('Orynex Studio — Anti-Spam Honeypot & Duplicate Submissions', () => {
 })
 
 describe('Orynex Studio — CORS Origins & OPTIONS Preflight Handling', () => {
+  const vercelOrigin = 'https://orynexstudio-git-main-team-itachi.vercel.app'
+  const prodOrigin = 'https://orynex.studio'
+  const wwwOrigin = 'https://www.orynex.studio'
+  const localhostOrigin = 'http://localhost:5173'
+
   it('permits authorized production origins with proper headers', () => {
-    const prodOrigin = 'https://orynex.studio'
     const result = evaluateCors(prodOrigin, 'POST')
     assert.equal(result.allowed, true)
     assert.equal(result.status, 200)
@@ -569,14 +574,73 @@ describe('Orynex Studio — CORS Origins & OPTIONS Preflight Handling', () => {
     assert.equal(result.headers['Access-Control-Allow-Methods'], 'POST, OPTIONS')
   })
 
+  it('permits the deployed Vercel origin for OPTIONS preflight with 204 and CORS headers', () => {
+    const result = evaluateCors(vercelOrigin, 'OPTIONS')
+    assert.equal(result.allowed, true)
+    assert.equal(result.status, 204)
+    assert.equal(result.headers['Access-Control-Allow-Origin'], vercelOrigin)
+    assert.equal(result.headers['Access-Control-Allow-Methods'], 'POST, OPTIONS')
+    assert.equal(
+      result.headers['Access-Control-Allow-Headers'],
+      'Content-Type, Authorization, x-client-info, apikey'
+    )
+    assert.equal(result.headers['Access-Control-Max-Age'], '86400')
+    assert.equal(result.headers['Vary'], 'Origin')
+  })
+
+  it('permits the deployed Vercel origin for POST requests with proper CORS headers', () => {
+    const result = evaluateCors(vercelOrigin, 'POST')
+    assert.equal(result.allowed, true)
+    assert.equal(result.status, 200)
+    assert.equal(result.headers['Access-Control-Allow-Origin'], vercelOrigin)
+    assert.equal(result.headers['Access-Control-Allow-Methods'], 'POST, OPTIONS')
+    assert.equal(
+      result.headers['Access-Control-Allow-Headers'],
+      'Content-Type, Authorization, x-client-info, apikey'
+    )
+  })
+
   it('permits localhost development origins for local dev server', () => {
-    const localhostOrigin = 'http://localhost:5173'
     const result = evaluateCors(localhostOrigin, 'POST')
     assert.equal(result.allowed, true)
     assert.equal(result.headers['Access-Control-Allow-Origin'], localhostOrigin)
   })
 
-  it('strictly rejects disallowed origins without permissive CORS headers', () => {
+  it('preserves Access-Control-Allow-Origin on validation failure (HTTP 422)', () => {
+    const result = evaluateCors(vercelOrigin, 'POST', 422)
+    assert.equal(result.status, 422)
+    assert.equal(result.headers['Access-Control-Allow-Origin'], vercelOrigin)
+  })
+
+  it('preserves Access-Control-Allow-Origin on payload size rejection (HTTP 413)', () => {
+    const result = evaluateCors(vercelOrigin, 'POST', 413)
+    assert.equal(result.status, 413)
+    assert.equal(result.headers['Access-Control-Allow-Origin'], vercelOrigin)
+  })
+
+  it('preserves Access-Control-Allow-Origin on unsupported media type (HTTP 415)', () => {
+    const result = evaluateCors(vercelOrigin, 'POST', 415)
+    assert.equal(result.status, 415)
+    assert.equal(result.headers['Access-Control-Allow-Origin'], vercelOrigin)
+  })
+
+  it('preserves Access-Control-Allow-Origin on rate limit rejection (HTTP 429)', () => {
+    const result = evaluateCors(vercelOrigin, 'POST', 429)
+    assert.equal(result.status, 429)
+    assert.equal(result.headers['Access-Control-Allow-Origin'], vercelOrigin)
+  })
+
+  it('preserves Access-Control-Allow-Origin on server/database error (HTTP 500, 503)', () => {
+    const result500 = evaluateCors(vercelOrigin, 'POST', 500)
+    assert.equal(result500.status, 500)
+    assert.equal(result500.headers['Access-Control-Allow-Origin'], vercelOrigin)
+
+    const result503 = evaluateCors(prodOrigin, 'POST', 503)
+    assert.equal(result503.status, 503)
+    assert.equal(result503.headers['Access-Control-Allow-Origin'], prodOrigin)
+  })
+
+  it('strictly rejects disallowed origins without permissive CORS headers on POST', () => {
     const rogueOrigin = 'https://malicious-phishing.com'
     const result = evaluateCors(rogueOrigin, 'POST')
     assert.equal(result.allowed, false)
@@ -584,11 +648,18 @@ describe('Orynex Studio — CORS Origins & OPTIONS Preflight Handling', () => {
     assert.equal(result.headers['Access-Control-Allow-Origin'], undefined)
   })
 
-  it('handles OPTIONS preflight for allowed origin with 204 and CORS headers', () => {
-    const prodOrigin = 'https://www.orynex.studio'
-    const result = evaluateCors(prodOrigin, 'OPTIONS')
+  it('strictly rejects arbitrary/unapproved Vercel preview URLs', () => {
+    const unapprovedVercel = 'https://unapproved-fork-preview.vercel.app'
+    const result = evaluateCors(unapprovedVercel, 'OPTIONS')
+    assert.equal(result.allowed, false)
+    assert.equal(result.status, 403)
+    assert.equal(result.headers['Access-Control-Allow-Origin'], undefined)
+  })
+
+  it('handles OPTIONS preflight for allowed production origin with 204 and CORS headers', () => {
+    const result = evaluateCors(wwwOrigin, 'OPTIONS')
     assert.equal(result.status, 204)
-    assert.equal(result.headers['Access-Control-Allow-Origin'], prodOrigin)
+    assert.equal(result.headers['Access-Control-Allow-Origin'], wwwOrigin)
     assert.equal(result.headers['Access-Control-Max-Age'], '86400')
   })
 

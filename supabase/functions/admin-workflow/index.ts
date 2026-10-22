@@ -10,6 +10,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://orynex.studio',
   'https://www.orynex.studio',
+  'https://orynexstudio-git-main-team-itachi.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',

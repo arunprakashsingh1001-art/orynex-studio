@@ -22,11 +22,13 @@ const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9]+([.-][A-Za-z0-9]+)*\.[A-Za-z
 // ==============================================================================
 // Allowed origins for Orynex Studio.
 // Production domains: https://orynex.studio, https://www.orynex.studio
+// Deployed Vercel origin: https://orynexstudio-git-main-team-itachi.vercel.app
 // Localhost development origins: allowed for local testing/development.
 // Can also be augmented via ALLOWED_ORIGINS environment variable (comma-separated).
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://orynex.studio',
   'https://www.orynex.studio',
+  'https://orynexstudio-git-main-team-itachi.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
@@ -36,10 +38,11 @@ const DEFAULT_ALLOWED_ORIGINS = [
 function getAllowedOrigins(): string[] {
   const envOrigins = Deno.env.get('ALLOWED_ORIGINS')
   if (envOrigins) {
-    return envOrigins
+    const parsed = envOrigins
       .split(',')
       .map((o) => o.trim())
       .filter(Boolean)
+    return Array.from(new Set([...DEFAULT_ALLOWED_ORIGINS, ...parsed]))
   }
   return DEFAULT_ALLOWED_ORIGINS
 }
@@ -211,10 +214,11 @@ Deno.serve(async (req: Request) => {
     )
   }
 
-  // 3. Validate HTTP Method
-  if (req.method !== 'POST') {
-    return jsonResponse({ success: false, message: 'Method not allowed' }, 405, corsHeaders)
-  }
+  try {
+    // 3. Validate HTTP Method
+    if (req.method !== 'POST') {
+      return jsonResponse({ success: false, message: 'Method not allowed' }, 405, corsHeaders)
+    }
 
   // 4. Validate Content-Type
   const contentType = req.headers.get('content-type') || ''
@@ -499,6 +503,14 @@ Deno.serve(async (req: Request) => {
 
   // 14. Return generic success to visitor
   return jsonResponse({ success: true, message: 'Inquiry received' }, 200, corsHeaders)
+  } catch (fatalErr) {
+    console.error('[submit-lead] Uncaught server error:', fatalErr)
+    return jsonResponse(
+      { success: false, message: 'Internal server error. Please try again later.' },
+      500,
+      corsHeaders
+    )
+  }
 })
 
 function escapeHtml(text: string): string {
