@@ -937,22 +937,69 @@ describe('Orynex Studio — Admin Authorization & Delivery Safeguards', () => {
   })
 })
 
+describe('Orynex Studio — Gemini Structured Output Schema Contract', () => {
+  const promptsFilePath = path.resolve('supabase/functions/process-ai-workflow/prompts.ts')
+  const promptsSource = fs.readFileSync(promptsFilePath, 'utf-8')
+
+  const expectedRequiredKeys = {
+    'Digital Product Design': [
+      'summary', 'needs_clarification', 'clarification_questions',
+      'design_brief', 'page_structure', 'component_specifications', 'prototype_draft',
+    ],
+    'Technology Architecture': [
+      'summary', 'needs_clarification', 'clarification_questions',
+      'executive_summary', 'data_flow', 'technology_choices', 'system_assumptions', 'risks_and_mitigations',
+    ],
+    'Custom Engineering': [
+      'summary', 'needs_clarification', 'clarification_questions',
+      'engineering_strategy', 'file_manifest', 'core_implementation_draft', 'test_plan',
+    ],
+    'Performance & Optimization': [
+      'summary', 'needs_clarification', 'clarification_questions',
+      'audit_diagnosis', 'telemetry_and_metrics', 'proposed_improvements', 'validation_steps',
+    ],
+  }
+
+  it('requires every top-level field checked by the runtime validator', () => {
+    const serviceMarkers = Object.keys(expectedRequiredKeys).map((service) => `  '${service}': {`)
+    for (const [service, expectedKeys] of Object.entries(expectedRequiredKeys)) {
+      const marker = `  '${service}': {`
+      const startIndex = promptsSource.indexOf(marker)
+      assert.notEqual(startIndex, -1, `Missing prompt schema for ${service}`)
+
+      const laterStarts = serviceMarkers
+        .map((nextMarker) => promptsSource.indexOf(nextMarker, startIndex + marker.length))
+        .filter((index) => index >= 0)
+      const endIndex = laterStarts.length > 0 ? Math.min(...laterStarts) : promptsSource.length
+      const serviceBlock = promptsSource.slice(startIndex, endIndex)
+      const requiredArrays = [...serviceBlock.matchAll(/required:\s*\[([^\]]*)\]/g)]
+      assert.ok(requiredArrays.length > 0, `No JSON Schema required list found for ${service}`)
+
+      const rootRequired = requiredArrays[requiredArrays.length - 1][1]
+      const rootKeys = [...rootRequired.matchAll(/'([^']+)'/g)].map((match) => match[1])
+      for (const key of expectedKeys) {
+        assert.ok(rootKeys.includes(key), `Schema for ${service} must require top-level field ${key}`)
+      }
+    }
+  })
+})
+
 describe('Orynex Studio — Gemini API Authentication & Header Security', () => {
   const geminiFilePath = path.resolve('supabase/functions/process-ai-workflow/gemini.ts')
   const geminiSource = fs.readFileSync(geminiFilePath, 'utf-8')
 
   it('uses x-goog-api-key header for authentication instead of URL query parameter', () => {
-    // Must NOT contain ?key= in endpoint definition
+    // Must NOT contain ?key= in any endpoint; API key belongs in a header.
     assert.doesNotMatch(
       geminiSource,
-      /endpoint\s*=\s*`[^`]*\?key=/,
+      /\?key=/,
       'Gemini API key must not be passed in the URL query string'
     )
 
-    // Endpoint must point to official Gemini generateContent API without query string
+    // Requests must use the official Gemini generateContent endpoint.
     assert.match(
       geminiSource,
-      /endpoint\s*=\s*`https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\/\${model}:generateContent`/,
+      /https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\/\$\{candidateModel\}:generateContent/,
       'Official generateContent endpoint should not contain query parameters'
     )
 
@@ -988,6 +1035,29 @@ describe('Orynex Studio — Gemini API Authentication & Header Security', () => 
       geminiSource,
       /Deno\.env\.get\('GEMINI_MODEL'\)\s*\|\|\s*DEFAULT_MODEL/,
       'Model must be configurable via GEMINI_MODEL environment variable'
+    )
+  })
+
+  it('falls back through supported Flash models when Google returns HTTP 503', () => {
+    assert.match(
+      geminiSource,
+      /Deno\.env\.get\('GEMINI_FALLBACK_MODEL'\)\s*\|\|\s*'gemini-3\.6-flash'/,
+      'First fallback should be a stable Flash model'
+    )
+    assert.match(
+      geminiSource,
+      /Deno\.env\.get\('GEMINI_SECONDARY_FALLBACK_MODEL'\)\s*\|\|\s*'gemini-3\.5-flash-lite'/,
+      'Secondary fallback should use Flash-Lite by default'
+    )
+    assert.match(
+      geminiSource,
+      /Deno\.env\.get\('GEMINI_TERTIARY_FALLBACK_MODEL'\)\s*\|\|\s*'gemini-3\.1-flash-lite'/,
+      'Tertiary fallback should use Flash-Lite by default'
+    )
+    assert.match(
+      geminiSource,
+      /response\.status === 503 && hasFallback/,
+      'Only temporary service overload should advance the fallback chain'
     )
   })
 
