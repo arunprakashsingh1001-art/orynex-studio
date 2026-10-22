@@ -3,9 +3,9 @@ import { Chevron, Close, Logo, Menu } from './icons.jsx'
 import './Navbar.css'
 
 const navLinks = [
-  { label: 'Features', href: '#features', hasMenu: true },
-  { label: 'How It Works', href: '#how-it-works' },
-  { label: 'About', href: '#about' },
+  { label: 'Capabilities', href: '#capabilities', hasMenu: true },
+  { label: 'Impact', href: '#stats' },
+  { label: 'Partners', href: '#about' },
 ]
 
 export default function Navbar({ onOpenContact }) {
@@ -47,11 +47,7 @@ export default function Navbar({ onOpenContact }) {
   const scrollToSection = (href) => {
     const el = document.querySelector(href)
     if (el) {
-      if (window.getComputedStyle(el).display === 'none' && href === '#how-it-works') {
-        document.querySelector('#stats')?.scrollIntoView({ behavior: 'smooth' })
-      } else {
-        el.scrollIntoView({ behavior: 'smooth' })
-      }
+      el.scrollIntoView({ behavior: 'smooth' })
     } else {
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
@@ -65,10 +61,11 @@ export default function Navbar({ onOpenContact }) {
   }
 
   return (
-    <header className="nav">
+    <header className="nav" role="banner">
       <a
         className="nav__brand"
         href="#hero"
+        aria-label="Orynex Studio — Return to top"
         onClick={(e) => {
           e.preventDefault()
           window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -78,7 +75,7 @@ export default function Navbar({ onOpenContact }) {
         <span>Orynex Studio</span>
       </a>
 
-      <nav className="nav__pill" aria-label="Primary">
+      <nav className="nav__pill" aria-label="Primary Navigation">
         <ul>
           {navLinks.map((link) => (
             <li
@@ -93,36 +90,45 @@ export default function Navbar({ onOpenContact }) {
                     className="nav__link nav__link--btn"
                     aria-expanded={menuOpen}
                     aria-haspopup="true"
+                    aria-controls="capabilities-dropdown"
                     onClick={() => setMenuOpen((v) => !v)}
                   >
                     {link.label}
                     <Chevron className={`nav__chev ${menuOpen ? 'is-open' : ''}`} />
                   </button>
                   {menuOpen && (
-                    <div className="nav__dropdown" role="menu">
+                    <div className="nav__dropdown" id="capabilities-dropdown" role="menu">
                       <a
-                        href="#features"
+                        href="#capabilities"
                         role="menuitem"
-                        onClick={(e) => handleLinkClick(e, '#features')}
+                        onClick={(e) => handleLinkClick(e, '#capabilities')}
                       >
-                        <strong>Human-Crafted Tech</strong>
-                        <span>Intuitive digital experiences</span>
+                        <strong>Digital Product Design</strong>
+                        <span>Human-first UI/UX & design systems</span>
                       </a>
                       <a
-                        href="#stats"
+                        href="#capabilities"
                         role="menuitem"
-                        onClick={(e) => handleLinkClick(e, '#stats')}
+                        onClick={(e) => handleLinkClick(e, '#capabilities')}
                       >
-                        <strong>Performance & Scale</strong>
-                        <span>150+ projects & 98% satisfaction</span>
+                        <strong>Technology Architecture</strong>
+                        <span>Distributed cloud & edge resilience</span>
                       </a>
                       <a
-                        href="#how-it-works"
+                        href="#capabilities"
                         role="menuitem"
-                        onClick={(e) => handleLinkClick(e, '#how-it-works')}
+                        onClick={(e) => handleLinkClick(e, '#capabilities')}
                       >
-                        <strong>Impact Measurement</strong>
-                        <span>Meaningful metrics & feedback</span>
+                        <strong>Custom Engineering</strong>
+                        <span>Type-safe pipelines & event engines</span>
+                      </a>
+                      <a
+                        href="#capabilities"
+                        role="menuitem"
+                        onClick={(e) => handleLinkClick(e, '#capabilities')}
+                      >
+                        <strong>Performance & Optimization</strong>
+                        <span>Core Web Vitals & speed profiling</span>
                       </a>
                     </div>
                   )}

@@ -259,6 +259,127 @@
 
 .ghost__copy { margin-top: 8px; font-size: 12.5px; line-height: 1.6; }
 
+/* ---------- capabilities showcase ---------- */
+.hero__capabilities {
+  margin-top: calc(52px * var(--scale));
+  padding-top: calc(36px * var(--scale));
+  border-top: 1px solid var(--hair-soft);
+  position: relative;
+  z-index: 2;
+}
+
+.capabilities__header {
+  max-width: 680px;
+  margin-bottom: calc(24px * var(--scale));
+}
+
+.capabilities__eyebrow {
+  display: inline-block;
+  font-size: calc(11.5px * var(--ui-scale));
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--flame-lit);
+  margin-bottom: 6px;
+}
+
+.capabilities__heading {
+  font-family: var(--font-display);
+  font-size: calc(clamp(1.5rem, 2.6vw, 2.2rem) * var(--scale));
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.capabilities__sub {
+  margin-top: 6px;
+  font-size: calc(13.5px * var(--ui-scale));
+  color: var(--ink-soft);
+}
+
+.capabilities__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: calc(16px * var(--scale));
+}
+
+.capability-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: calc(20px * var(--ui-scale));
+  border: 1px solid var(--hair);
+  border-radius: 16px;
+  background: var(--glass);
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform 0.3s var(--ease-out), border-color 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+}
+
+.capability-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(255, 138, 31, 0.4);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.capability-card__badge {
+  align-self: flex-start;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 61, 0, 0.14);
+  border: 1px solid rgba(255, 138, 31, 0.25);
+  color: #ff9e80;
+  margin-bottom: 12px;
+}
+
+.capability-card__title {
+  font-family: var(--font-display);
+  font-size: calc(17px * var(--scale));
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin-bottom: 8px;
+  color: #fff;
+}
+
+.capability-card__desc {
+  font-size: calc(13px * var(--ui-scale));
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin-bottom: 18px;
+  flex: 1;
+}
+
+.capability-card__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12.5px * var(--ui-scale));
+  font-weight: 600;
+  color: var(--flame-lit);
+  padding: 0;
+  transition: gap 0.2s var(--ease-out), color 0.2s var(--ease-out);
+}
+
+.capability-card__btn:hover {
+  gap: 12px;
+  color: #fff;
+}
+
+.capability-card__btn svg {
+  width: 13px;
+  height: 13px;
+  transition: transform 0.2s var(--ease-out);
+}
+
+.capability-card__btn:hover svg {
+  transform: translateX(3px);
+}
+
 /* ---------- footer band ---------- */
 .hero__foot {
   position: relative;

@@ -6,6 +6,7 @@ import AdminPortal from './components/AdminPortal.jsx'
 
 export default function App() {
   const [isContactOpen, setIsContactOpen] = useState(false)
+  const [selectedService, setSelectedService] = useState('Digital Product Design')
   const [isAdminRoute, setIsAdminRoute] = useState(() => {
     return window.location.pathname === '/admin' || window.location.hash.startsWith('#/admin')
   })
@@ -29,15 +30,21 @@ export default function App() {
     return <AdminPortal />
   }
 
+  const handleOpenContact = (service = 'Digital Product Design') => {
+    setSelectedService(service)
+    setIsContactOpen(true)
+  }
+
   return (
     <>
       <a className="skip-link" href="#main">Skip to content</a>
-      <Navbar onOpenContact={() => setIsContactOpen(true)} />
+      <Navbar onOpenContact={() => handleOpenContact()} />
       <main id="main">
-        <Hero onOpenContact={() => setIsContactOpen(true)} />
+        <Hero onOpenContact={handleOpenContact} />
       </main>
       <ContactModal
         isOpen={isContactOpen}
+        initialService={selectedService}
         onClose={() => setIsContactOpen(false)}
       />
     </>

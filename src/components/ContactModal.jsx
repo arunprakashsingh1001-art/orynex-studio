@@ -49,14 +49,21 @@ export function validateProjectOverview(text) {
   return { valid: true, sanitized: trimmed }
 }
 
-export default function ContactModal({ isOpen, onClose }) {
+const SERVICES = [
+  'Digital Product Design',
+  'Technology Architecture',
+  'Custom Engineering',
+  'Performance & Optimization',
+]
+
+export default function ContactModal({ isOpen, onClose, initialService }) {
   const [status, setStatus] = useState('idle') // 'idle' | 'loading' | 'success' | 'error'
   const [errorMessage, setErrorMessage] = useState(null)
   const [overviewError, setOverviewError] = useState(null)
   const [formData, setFormData] = useState({
     name: '',
     email: '',
-    service: 'Digital Product Design',
+    service: initialService || 'Digital Product Design',
     message: '',
     company_website: '', // Anti-spam honeypot
   })
@@ -73,6 +80,10 @@ export default function ContactModal({ isOpen, onClose }) {
       setErrorMessage(null)
       setOverviewError(null)
 
+      if (initialService) {
+        setFormData((prev) => ({ ...prev, service: initialService }))
+      }
+
       // Focus first input on next tick
       setTimeout(() => {
         firstInputRef.current?.focus()
@@ -81,8 +92,28 @@ export default function ContactModal({ isOpen, onClose }) {
       const handleKeyDown = (e) => {
         if (e.key === 'Escape') {
           onClose()
+          return
+        }
+
+        // Accessible Tab Focus Trap inside modal
+        if (e.key === 'Tab' && modalRef.current) {
+          const focusable = modalRef.current.querySelectorAll(
+            'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+          if (focusable.length === 0) return
+          const first = focusable[0]
+          const last = focusable[focusable.length - 1]
+
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault()
+            last.focus()
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault()
+            first.focus()
+          }
         }
       }
+
       window.addEventListener('keydown', handleKeyDown)
       return () => {
         window.removeEventListener('keydown', handleKeyDown)
@@ -94,7 +125,7 @@ export default function ContactModal({ isOpen, onClose }) {
         previousFocusRef.current.focus()
       }
     }
-  }, [isOpen, onClose])
+  }, [isOpen, onClose, initialService])
 
   if (!isOpen) return null
 
@@ -294,31 +325,71 @@ export default function ContactModal({ isOpen, onClose }) {
               </div>
 
               <div className="modal-field">
-                <label htmlFor="contact-service">Service Focus</label>
+                <label id="service-focus-label" htmlFor="contact-service">Service Focus</label>
+                <div
+                  className="modal-service-pills"
+                  role="radiogroup"
+                  aria-labelledby="service-focus-label"
+                >
+                  {SERVICES.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      role="radio"
+                      aria-checked={formData.service === s}
+                      className={`modal-service-pill ${formData.service === s ? 'is-selected' : ''}`}
+                      onClick={() => setFormData({ ...formData, service: s })}
+                      disabled={status === 'loading'}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
                 <select
                   id="contact-service"
                   disabled={status === 'loading'}
                   value={formData.service}
+                  aria-label="Service focus select dropdown"
                   onChange={(e) =>
                     setFormData({ ...formData, service: e.target.value })
                   }
                 >
-                  <option value="Digital Product Design">Digital Product Design</option>
-                  <option value="Technology Architecture">Technology Architecture</option>
-                  <option value="Custom Engineering">Custom Engineering</option>
-                  <option value="Performance & Optimization">Performance & Optimization</option>
+                  {SERVICES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
                 </select>
               </div>
 
               <div className="modal-field">
                 <div className="modal-field-header">
                   <label htmlFor="contact-message">Project Overview *</label>
-                  <span className="modal-char-counter" aria-live="polite">
+                  <span
+                    className={`modal-char-counter ${
+                      formData.message.length >= 1900
+                        ? 'is-warn'
+                        : formData.message.length >= 20
+                          ? 'is-good'
+                          : ''
+                    }`}
+                    aria-live="polite"
+                  >
                     {formData.message.length} / 2000
                   </span>
                 </div>
+                <div className="modal-char-meter" aria-hidden="true">
+                  <div
+                    className={`modal-char-fill ${formData.message.length >= 20 ? 'is-good' : 'is-short'}`}
+                    style={{ width: `${Math.min(100, (formData.message.length / 20) * 100)}%` }}
+                  />
+                </div>
                 <p id="contact-message-helper" className="modal-helper-text">
-                  Tell us what you want to build, improve, or achieve. Describe your idea in simple words.
+                  {formData.message.length === 0
+                    ? 'Describe your project idea, goals, or systems to integrate in simple words (minimum 20 characters).'
+                    : formData.message.length < 20
+                      ? `${20 - formData.message.length} more meaningful character${20 - formData.message.length === 1 ? '' : 's'} needed for proposal generation.`
+                      : formData.message.length >= 1900
+                        ? `Approaching 2,000 character maximum limit (${2000 - formData.message.length} characters left).`
+                        : '✓ Minimum length satisfied. Feel free to add any specific constraints or timelines.'}
                 </p>
                 <textarea
                   id="contact-message"

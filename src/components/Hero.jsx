@@ -9,6 +9,29 @@ const stats = [
 
 const bars = [34, 52, 44, 70, 88]
 
+const capabilities = [
+  {
+    title: 'Digital Product Design',
+    description: 'Human-first UI/UX systems, fluid micro-interactions, responsive tokens, and wireframes.',
+    badge: 'Design Systems',
+  },
+  {
+    title: 'Technology Architecture',
+    description: 'Distributed cloud topology, serverless edge compute, and resilient database boundaries.',
+    badge: 'Cloud & Database',
+  },
+  {
+    title: 'Custom Engineering',
+    description: 'Production-ready TypeScript implementations, durable queue orchestration, and API adapters.',
+    badge: 'Full-Stack',
+  },
+  {
+    title: 'Performance & Optimization',
+    description: 'Core Web Vitals diagnostics, thread latency profiling, and asset pipeline acceleration.',
+    badge: 'Latency & CWV',
+  },
+]
+
 export default function Hero({ onOpenContact }) {
   const videoRef = useRef(null)
   const [ready, setReady] = useState(false)
@@ -52,7 +75,7 @@ export default function Hero({ onOpenContact }) {
         <div className="hero__lead" id="features">
           <p className="hero__note" id="support">
             <Globe className="hero__note-icon" />
-            <span>Hub support peoples from<br />all over the world</span>
+            <span>Supporting partners and teams<br />worldwide</span>
           </p>
 
           <h1 className="hero__title">
@@ -70,7 +93,7 @@ export default function Hero({ onOpenContact }) {
             <button
               type="button"
               className="btn btn--flame hero__go"
-              onClick={onOpenContact}
+              onClick={() => onOpenContact('Digital Product Design')}
               aria-haspopup="dialog"
             >
               Get started
@@ -103,9 +126,9 @@ export default function Hero({ onOpenContact }) {
           </ul>
         </div>
 
-        <aside className="hero__ghost" id="how-it-works" aria-hidden="true">
+        <aside className="hero__ghost" id="how-it-works" aria-label="Experience performance metrics">
           <div className="ghost__row">
-            <div className="ghost__bars">
+            <div className="ghost__bars" aria-hidden="true">
               {bars.map((h, i) => (
                 <span key={i} style={{ height: `${h}%` }} />
               ))}
@@ -118,6 +141,32 @@ export default function Hero({ onOpenContact }) {
             refine every detail until the experience feels effortless.
           </p>
         </aside>
+      </div>
+
+      <div className="hero__capabilities" id="capabilities" aria-label="Core studio capabilities">
+        <div className="capabilities__header">
+          <span className="capabilities__eyebrow">Core Capabilities</span>
+          <h2 className="capabilities__heading">Engineered for Humans, Optimized for Scale</h2>
+          <p className="capabilities__sub">Select a discipline to start tailored scoping and consultation with our team.</p>
+        </div>
+        <div className="capabilities__grid">
+          {capabilities.map((cap) => (
+            <article key={cap.title} className="capability-card">
+              <span className="capability-card__badge">{cap.badge}</span>
+              <h3 className="capability-card__title">{cap.title}</h3>
+              <p className="capability-card__desc">{cap.description}</p>
+              <button
+                type="button"
+                className="capability-card__btn"
+                onClick={() => onOpenContact(cap.title)}
+                aria-label={`Inquire about ${cap.title}`}
+              >
+                <span>Start Consultation</span>
+                <ArrowRight />
+              </button>
+            </article>
+          ))}
+        </div>
       </div>
 
       <div className="hero__foot" id="about">
