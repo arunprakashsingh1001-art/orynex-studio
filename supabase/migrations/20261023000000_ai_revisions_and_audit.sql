@@ -9,7 +9,7 @@
 --              6. RLS security hardening and service-role execution grants
 -- ==============================================================================
 
--- 1. Add revision tracking columns to public.ai_service_jobs
+-- 1. Add revision tracking columns to public.ai_service_jobs and queue columns to public.leads
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -22,6 +22,16 @@ BEGIN
             ADD COLUMN approved_revision INT,
             ADD COLUMN approved_snapshot JSONB,
             ADD COLUMN refined_instructions TEXT;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'leads' AND column_name = 'queue_status'
+    ) THEN
+        ALTER TABLE public.leads 
+            ADD COLUMN queue_status TEXT NOT NULL DEFAULT 'queued' 
+                CHECK (queue_status IN ('pending', 'queued', 'failed')),
+            ADD COLUMN queue_error TEXT;
     END IF;
 END $$;
 
@@ -91,7 +101,8 @@ BEGIN
         service,
         project_overview,
         ip_hash,
-        notification_status
+        notification_status,
+        queue_status
     )
     VALUES (
         p_name,
@@ -99,7 +110,8 @@ BEGIN
         p_service,
         p_project_overview,
         p_ip_hash,
-        'pending'
+        'pending',
+        'queued'
     )
     RETURNING id INTO v_lead_id;
 
@@ -213,8 +225,34 @@ DROP POLICY IF EXISTS "Service role full access on ai_review_decisions" ON publi
 CREATE POLICY "Service role full access on ai_review_decisions"
     ON public.ai_review_decisions FOR ALL TO service_role USING (true) WITH CHECK (true);
 
--- 7. Documentation & Scheduler Guidance
+-- 7. Database-Enforced Append-Only Immutability Triggers
+-- Strictly prevents UPDATE and DELETE on historical records even by privileged service-role
+CREATE OR REPLACE FUNCTION public.enforce_audit_append_only()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+    RAISE EXCEPTION 'Table % is strictly append-only. Modification or deletion of audit history is prohibited.', TG_TABLE_NAME;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_ai_job_revisions_append_only ON public.ai_job_revisions;
+CREATE TRIGGER trg_ai_job_revisions_append_only
+    BEFORE UPDATE OR DELETE ON public.ai_job_revisions
+    FOR EACH ROW
+    EXECUTE FUNCTION public.enforce_audit_append_only();
+
+DROP TRIGGER IF EXISTS trg_ai_review_decisions_append_only ON public.ai_review_decisions;
+CREATE TRIGGER trg_ai_review_decisions_append_only
+    BEFORE UPDATE OR DELETE ON public.ai_review_decisions
+    FOR EACH ROW
+    EXECUTE FUNCTION public.enforce_audit_append_only();
+
+-- 8. Documentation & Scheduler Guidance
 COMMENT ON TABLE public.ai_job_revisions IS 'Immutable history of AI generation runs, prompts, and drafts per revision.';
 COMMENT ON TABLE public.ai_review_decisions IS 'Immutable audit log of all administrator review actions (approvals, revisions, edits, rejections).';
 COMMENT ON FUNCTION public.submit_lead_with_job(TEXT, TEXT, TEXT, TEXT, TEXT) IS 'Transactional atomic creation of customer lead and queued AI service job.';
 COMMENT ON FUNCTION public.approve_and_lock_revision(UUID, INT, JSONB, UUID, TEXT, TEXT) IS 'Atomic approval lock binding an immutable snapshot and revision number.';
+COMMENT ON FUNCTION public.enforce_audit_append_only() IS 'Database-enforced append-only trigger function preventing updates and deletions.';

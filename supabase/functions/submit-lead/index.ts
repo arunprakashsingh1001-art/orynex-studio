@@ -402,6 +402,7 @@ Deno.serve(async (req: Request) => {
           project_overview: message,
           ip_hash: ipHash,
           notification_status: 'pending',
+          queue_status: 'pending',
         },
       ])
       .select('id')
@@ -437,12 +438,13 @@ Deno.serve(async (req: Request) => {
 
     if (jobEnqueueError) {
       console.error('[submit-lead] CRITICAL: Failed to enqueue AI service job for lead:', leadId, jobEnqueueError.message)
-      // Record observable error state on lead rather than silently ignoring
+      // Record observable error state on lead in queue_status / queue_error
+      // Note: notification_status is strictly for email notifications ('pending', 'sent', 'failed')
       await supabase
         .from('leads')
         .update({
-          notification_status: 'queue_failed',
-          notification_error: jobEnqueueError.message,
+          queue_status: 'failed',
+          queue_error: jobEnqueueError.message,
         })
         .eq('id', leadId)
 
@@ -452,6 +454,12 @@ Deno.serve(async (req: Request) => {
         corsHeaders
       )
     }
+
+    // Mark lead queue_status as queued upon successful job creation
+    await supabase
+      .from('leads')
+      .update({ queue_status: 'queued' })
+      .eq('id', leadId)
 
     console.log(`[submit-lead] AI service job queued for lead: ${leadId}`)
   }

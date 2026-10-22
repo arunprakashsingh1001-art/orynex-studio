@@ -991,16 +991,24 @@ describe('Orynex Studio — Gemini API Authentication & Header Security', () => 
     )
   })
 
-  it('preserves offline mock mode for safe local testing without paid API calls', () => {
+  it('preserves offline mock mode strictly when MOCK_GEMINI=true is explicitly configured', () => {
     assert.match(
       geminiSource,
-      /isMock\s*=\s*Deno\.env\.get\('MOCK_GEMINI'\)\s*===\s*'true'\s*\|\|\s*!apiKey/,
-      'Mock mode must activate when MOCK_GEMINI=true or when API key is missing'
+      /isExplicitMock\s*=\s*Deno\.env\.get\('MOCK_GEMINI'\)\s*===\s*'true'/,
+      'Mock mode must activate only when MOCK_GEMINI=true is explicitly set'
     )
     assert.match(
       geminiSource,
       /generateMockDraft\(service,\s*clientName,\s*sanitizedBrief\)/,
       'Mock draft generation should remain intact'
+    )
+  })
+
+  it('fails closed in production if GEMINI_API_KEY is not configured', () => {
+    assert.match(
+      geminiSource,
+      /if\s*\(!apiKey\)\s*\{[\s\S]*?success:\s*false[\s\S]*?GEMINI_API_KEY is not configured in environment/,
+      'Must fail closed with success: false when GEMINI_API_KEY is missing'
     )
   })
 })
@@ -1190,6 +1198,77 @@ describe('Orynex Studio — Revisions, Audit & Scheduler Migrations Audit', () =
     assert.match(schedSql, /cron\.schedule/, 'Scheduler migration should define pg_cron invocation schedule')
     assert.match(schedSql, /net\.http_post/, 'Scheduler migration should invoke worker via pg_net')
   })
+
+  it('adds queue_status and queue_error to leads table to keep queue state separate from email notification_status', () => {
+    assert.match(
+      revMigrationSql,
+      /ALTER TABLE public\.leads[\s\S]*?ADD COLUMN queue_status TEXT NOT NULL DEFAULT 'queued'[\s\S]*?CHECK \(queue_status IN \('pending', 'queued', 'failed'\)\)/,
+      'Migration must add queue_status column to public.leads'
+    )
+    assert.match(
+      revMigrationSql,
+      /ADD COLUMN queue_error TEXT;/,
+      'Migration must add queue_error column to public.leads'
+    )
+  })
+
+  it('enforces append-only immutability triggers on ai_job_revisions and ai_review_decisions', () => {
+    assert.match(
+      revMigrationSql,
+      /CREATE OR REPLACE FUNCTION public\.enforce_audit_append_only\(\)[\s\S]*?RAISE EXCEPTION 'Table % is strictly append-only/i,
+      'Must declare enforce_audit_append_only trigger function'
+    )
+    assert.match(
+      revMigrationSql,
+      /CREATE TRIGGER trg_ai_job_revisions_append_only[\s\S]*?BEFORE UPDATE OR DELETE ON public\.ai_job_revisions[\s\S]*?EXECUTE FUNCTION public\.enforce_audit_append_only\(\)/,
+      'ai_job_revisions must have BEFORE UPDATE OR DELETE append-only trigger'
+    )
+    assert.match(
+      revMigrationSql,
+      /CREATE TRIGGER trg_ai_review_decisions_append_only[\s\S]*?BEFORE UPDATE OR DELETE ON public\.ai_review_decisions[\s\S]*?EXECUTE FUNCTION public\.enforce_audit_append_only\(\)/,
+      'ai_review_decisions must have BEFORE UPDATE OR DELETE append-only trigger'
+    )
+  })
 })
+
+describe('Orynex Studio — Resend Email Idempotency & Fail-Closed Delivery Audit', () => {
+  const adminWorkflowPath = path.resolve('supabase/functions/admin-workflow/index.ts')
+  const adminWorkflowSource = fs.readFileSync(adminWorkflowPath, 'utf-8')
+
+  it('passes Idempotency-Key header to Resend on approve_and_deliver and retry_delivery', () => {
+    assert.match(
+      adminWorkflowSource,
+      /'Idempotency-Key':\s*idempotencyKey/,
+      'Resend request must pass Idempotency-Key header to prevent duplicate customer emails'
+    )
+    assert.match(
+      adminWorkflowSource,
+      /idempotencyKey\s*=\s*`orynex_approve_\${jobId}_rev\${currentRevision}`/,
+      'Approval delivery idempotency key must bind to jobId and currentRevision'
+    )
+    assert.match(
+      adminWorkflowSource,
+      /idempotencyKey\s*=\s*`orynex_retry_\${jobId}_rev\${existingJob\.approved_revision/,
+      'Retry delivery idempotency key must bind to approved revision'
+    )
+  })
+
+  it('fails closed in production if RESEND_API_KEY is missing (never marks sent with fake success)', () => {
+    assert.match(
+      adminWorkflowSource,
+      /else if\s*\(!resendApiKey\)\s*\{[\s\S]*?deliverySuccess = false[\s\S]*?RESEND_API_KEY is not configured/,
+      'Must fail closed when RESEND_API_KEY is missing'
+    )
+  })
+
+  it('binds atomic approval via approve_and_lock_revision RPC with concurrency fallback', () => {
+    assert.match(
+      adminWorkflowSource,
+      /supabase\.rpc\('approve_and_lock_revision'/,
+      'approve_and_deliver must call approve_and_lock_revision RPC'
+    )
+  })
+})
+
 
 

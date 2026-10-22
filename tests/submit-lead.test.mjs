@@ -795,23 +795,27 @@ describe('Orynex Studio — Frontend Failure Handling & Zero Fake Success', () =
     assert.equal(atomicDb.jobs[0].status, 'queued')
   })
 
-  it('marks lead as queue_failed and returns safe error when queue enqueue fails', () => {
+  it('marks lead queue_status as failed while preserving notification_status and returns safe error when queue enqueue fails', () => {
     const leadRecord = {
       id: 'lead-err-123',
       name: 'Marcus Brody',
       email: 'marcus@museum.org',
       service: 'Digital Product Design',
       notification_status: 'pending',
+      queue_status: 'pending',
     }
 
     // Queue enqueue failure simulation
     const queueError = new Error('Database connection limit reached')
     if (queueError) {
-      leadRecord.notification_status = 'queue_failed'
-      leadRecord.notification_error = queueError.message
+      leadRecord.queue_status = 'failed'
+      leadRecord.queue_error = queueError.message
     }
 
-    assert.equal(leadRecord.notification_status, 'queue_failed')
+    // notification_status remains strictly within allowed DB check constraint ('pending', 'sent', 'failed')
+    assert.equal(leadRecord.notification_status, 'pending')
+    assert.equal(leadRecord.queue_status, 'failed')
+    assert.equal(leadRecord.queue_error, 'Database connection limit reached')
     assert.equal(leadRecord.id, 'lead-err-123', 'Inquiry must never be dropped even if queue fails')
 
     // Response must be generic and not leak internal stack traces

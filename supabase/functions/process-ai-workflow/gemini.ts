@@ -34,7 +34,7 @@ export async function callGeminiServiceWorkflow(
   const { service, clientName, clientEmail, briefText, modelOverride, customUserPrompt, customSystemInstruction, refinedInstructions } = options
   const model = modelOverride || Deno.env.get('GEMINI_MODEL') || DEFAULT_MODEL
   const apiKey = Deno.env.get('GEMINI_API_KEY')
-  const isMock = Deno.env.get('MOCK_GEMINI') === 'true' || !apiKey
+  const isExplicitMock = Deno.env.get('MOCK_GEMINI') === 'true'
 
   const promptDef = SERVICE_PROMPTS[service]
   if (!promptDef) {
@@ -56,14 +56,26 @@ export async function callGeminiServiceWorkflow(
   const systemInstructionText = customSystemInstruction || promptDef.systemInstruction
   const promptSnapshot = `[System]: ${systemInstructionText.slice(0, 300)}...\n[User Prompt]: ${userPrompt.slice(0, 500)}...`
 
-  // Offline Mock Mode for tests or pre-configuration
-  if (isMock) {
-    console.log(`[Gemini Client] Generating deterministic mock response for service: ${service}`)
+  // Offline Mock Mode strictly runs ONLY when MOCK_GEMINI=true is explicitly configured
+  if (isExplicitMock) {
+    console.log(`[Gemini Client] MOCK_GEMINI=true explicit test mode active for service: ${service}`)
     const mockDraft = generateMockDraft(service, clientName, sanitizedBrief)
     return {
       success: true,
       draft: mockDraft,
       modelUsed: `${model} (mock)`,
+      promptSnapshot,
+    }
+  }
+
+  // Production AI must fail closed if API key is missing
+  if (!apiKey) {
+    console.error('[Gemini Client] GEMINI_API_KEY is not configured. Production AI failing closed.')
+    return {
+      success: false,
+      error: 'GEMINI_API_KEY is not configured in environment',
+      status: 500,
+      modelUsed: model,
       promptSnapshot,
     }
   }

@@ -458,16 +458,23 @@ Deno.serve(async (req: Request) => {
       const service = existingJob.service
 
       const resendApiKey = Deno.env.get('RESEND_API_KEY')
-      const senderEmail = Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
-      const isTestDelivery = Deno.env.get('TEST_DELIVERY_MODE') === 'true' || !resendApiKey
+      const senderEmail = Deno.env.get('RESEND_FROM_EMAIL') || Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
+      const isExplicitTestMode = Deno.env.get('TEST_DELIVERY_MODE') === 'true'
+      const retryAttemptNum = (existingJob.delivery_attempts || 0) + 1
+      const idempotencyKey = `orynex_retry_${jobId}_rev${existingJob.approved_revision || 1}_att${retryAttemptNum}`
 
       let resendId: string | null = null
       let deliverySuccess = false
       let deliveryErrorMsg: string | null = null
 
-      if (isTestDelivery) {
+      if (isExplicitTestMode) {
+        console.log(`[admin-workflow] Explicit test mode active: simulated delivery retry for job ${jobId}`)
         resendId = `sim_resend_retry_${crypto.randomUUID().slice(0, 8)}`
         deliverySuccess = true
+      } else if (!resendApiKey) {
+        console.error('[admin-workflow] CRITICAL: RESEND_API_KEY is not configured. Delivery retry failing closed.')
+        deliverySuccess = false
+        deliveryErrorMsg = 'RESEND_API_KEY is not configured in environment'
       } else {
         try {
           const clientEmailHtml = formatClientDeliveryEmail(clientName, service, approvedSnapshot)
@@ -476,6 +483,7 @@ Deno.serve(async (req: Request) => {
             headers: {
               Authorization: `Bearer ${resendApiKey}`,
               'Content-Type': 'application/json',
+              'Idempotency-Key': idempotencyKey,
             },
             body: JSON.stringify({
               from: senderEmail,
@@ -604,53 +612,82 @@ Deno.serve(async (req: Request) => {
         )
       }
 
-      // Bind immutable approved snapshot and mark job as approved in database
+      // Bind immutable approved snapshot and mark job as approved atomically
       const reviewNotes = (payload.review_notes as string) || `Approved Revision ${currentRevision} for delivery by admin`
-      await supabase
-        .from('ai_service_jobs')
-        .update({
-          status: 'approved',
-          delivery_status: 'pending',
-          approved_revision: currentRevision,
-          approved_snapshot: activeDraft,
-          review_notes: reviewNotes,
-          reviewed_by: authenticatedUser.id,
-          reviewed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', jobId)
+      
+      const { data: lockResult, error: lockErr } = await supabase.rpc('approve_and_lock_revision', {
+        p_job_id: jobId,
+        p_revision_number: currentRevision,
+        p_approved_snapshot: activeDraft,
+        p_admin_user_id: authenticatedUser.id,
+        p_admin_email: userEmail,
+        p_review_notes: reviewNotes,
+      })
 
-      // Record approval decision in audit table
-      try {
-        await supabase.from('ai_review_decisions').insert([
-          {
-            job_id: jobId,
-            revision_number: currentRevision,
-            action: 'approve',
-            feedback: reviewNotes,
+      if (lockErr || lockResult === false) {
+        // Fallback conditional update if RPC is missing
+        const { data: updateData, error: updateErr } = await supabase
+          .from('ai_service_jobs')
+          .update({
+            status: 'approved',
+            delivery_status: 'pending',
+            approved_revision: currentRevision,
+            approved_snapshot: activeDraft,
+            review_notes: reviewNotes,
             reviewed_by: authenticatedUser.id,
-            reviewed_by_email: userEmail,
-            draft_snapshot: activeDraft,
-          },
-        ])
-      } catch (auditErr) {
-        console.warn('[admin-workflow] Audit record notice:', (auditErr as Error).message)
+            reviewed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', jobId)
+          .eq('status', 'review_pending')
+          .neq('delivery_status', 'sent')
+          .select('id')
+
+        if (updateErr || !updateData || updateData.length === 0) {
+          return jsonResponse(
+            { success: false, message: 'Approval rejected: job is not awaiting review or was already approved by another session.' },
+            409,
+            corsHeaders
+          )
+        }
+
+        // Record approval decision in audit table
+        try {
+          await supabase.from('ai_review_decisions').insert([
+            {
+              job_id: jobId,
+              revision_number: currentRevision,
+              action: 'approve',
+              feedback: reviewNotes,
+              reviewed_by: authenticatedUser.id,
+              reviewed_by_email: userEmail,
+              draft_snapshot: activeDraft,
+            },
+          ])
+        } catch (auditErr) {
+          console.warn('[admin-workflow] Audit record notice:', (auditErr as Error).message)
+        }
       }
 
       // Dispatch Client Delivery Email via Resend using ONLY the immutable approved snapshot
       const resendApiKey = Deno.env.get('RESEND_API_KEY')
-      const senderEmail = Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
-      const isTestDelivery = Deno.env.get('TEST_DELIVERY_MODE') === 'true' || !resendApiKey
+      const senderEmail = Deno.env.get('RESEND_FROM_EMAIL') || Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
+      const isExplicitTestMode = Deno.env.get('TEST_DELIVERY_MODE') === 'true'
+      const idempotencyKey = `orynex_approve_${jobId}_rev${currentRevision}`
 
       let resendId: string | null = null
       let deliverySuccess = false
       let deliveryErrorMsg: string | null = null
 
-      if (isTestDelivery) {
-        // Safe simulated delivery during test mode or when Resend key is unconfigured
-        console.log(`[admin-workflow] Simulated client delivery email for job ${jobId} (Rev ${currentRevision}) to ${clientEmail}`)
+      if (isExplicitTestMode) {
+        // Safe simulated delivery during explicit test mode
+        console.log(`[admin-workflow] Explicit test mode active: simulated delivery for job ${jobId} (Rev ${currentRevision}) to ${clientEmail}`)
         resendId = `sim_resend_${crypto.randomUUID().slice(0, 12)}`
         deliverySuccess = true
+      } else if (!resendApiKey) {
+        console.error('[admin-workflow] CRITICAL: RESEND_API_KEY is not configured. Customer delivery failing closed.')
+        deliverySuccess = false
+        deliveryErrorMsg = 'RESEND_API_KEY is not configured in environment'
       } else {
         try {
           const clientEmailHtml = formatClientDeliveryEmail(clientName, service, activeDraft)
@@ -659,6 +696,7 @@ Deno.serve(async (req: Request) => {
             headers: {
               Authorization: `Bearer ${resendApiKey}`,
               'Content-Type': 'application/json',
+              'Idempotency-Key': idempotencyKey,
             },
             body: JSON.stringify({
               from: senderEmail,
