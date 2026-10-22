@@ -82,6 +82,12 @@ export default function AdminPortal() {
       return
     }
 
+    if (!anonKey.trim()) {
+      setAuthError('Supabase API key is missing. Set VITE_SUPABASE_ANON_KEY in your Vercel project environment variables, then redeploy.')
+      setAuthLoading(false)
+      return
+    }
+
     try {
       const response = await fetch(`${sbUrl}/auth/v1/token?grant_type=password`, {
         method: 'POST',
