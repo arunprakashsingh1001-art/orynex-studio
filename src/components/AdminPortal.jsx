@@ -21,6 +21,8 @@ export default function AdminPortal() {
 
   const [authError, setAuthError] = useState(null)
   const [authLoading, setAuthLoading] = useState(false)
+  const [resetRequestLoading, setResetRequestLoading] = useState(false)
+  const [resetRequestMessage, setResetRequestMessage] = useState(null)
   const [credentials, setCredentials] = useState({ email: AUTHORIZED_ADMIN_EMAIL, password: '' })
 
   const [jobs, setJobs] = useState([])
@@ -116,6 +118,56 @@ export default function AdminPortal() {
       setAuthError(`Connection error: ${err.message}`)
     } finally {
       setAuthLoading(false)
+    }
+  }
+
+  const handlePasswordResetRequest = async () => {
+    setResetRequestLoading(true)
+    setResetRequestMessage(null)
+    setAuthError(null)
+
+    const sbUrl = getSupabaseUrl()
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
+    if (!sbUrl || !anonKey.trim()) {
+      setResetRequestMessage({
+        type: 'error',
+        text: 'Password reset is not configured. Please contact the site administrator.',
+      })
+      setResetRequestLoading(false)
+      return
+    }
+
+    try {
+      const redirectTo = window.location.origin
+      const response = await fetch(
+        `${sbUrl}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: anonKey },
+          body: JSON.stringify({ email: credentials.email.trim() }),
+        },
+      )
+      if (response.ok) {
+        setResetRequestMessage({
+          type: 'success',
+          text: 'If this email is registered, a password-reset link will be sent. Open the newest email and use it once.',
+        })
+      } else {
+        const data = await response.json().catch(() => ({}))
+        setResetRequestMessage({
+          type: 'error',
+          text: response.status === 429
+            ? 'Too many reset requests. Wait before trying again.'
+            : data?.message || data?.msg || 'Could not request a reset link. Please try again later.',
+        })
+      }
+    } catch {
+      setResetRequestMessage({
+        type: 'error',
+        text: 'Could not connect to the authentication service. Please try again later.',
+      })
+    } finally {
+      setResetRequestLoading(false)
     }
   }
 
@@ -331,6 +383,24 @@ export default function AdminPortal() {
             <button type="submit" className="admin-btn" style={{ width: '100%', marginTop: '8px' }} disabled={authLoading}>
               {authLoading ? 'Verifying Authorization...' : 'Sign In to Admin Portal'}
             </button>
+            <button
+              type="button"
+              className="admin-btn admin-btn--secondary"
+              style={{ width: '100%', marginTop: '8px' }}
+              onClick={handlePasswordResetRequest}
+              disabled={resetRequestLoading}
+            >
+              {resetRequestLoading ? 'Requesting Reset...' : 'Forgot Password? Send Reset Link'}
+            </button>
+            {resetRequestMessage && (
+              <div
+                className={resetRequestMessage.type === 'error' ? 'admin-error-banner' : 'admin-status-badge admin-status--approved'}
+                role="status"
+                style={{ marginTop: 12, padding: 10, whiteSpace: 'normal' }}
+              >
+                {resetRequestMessage.text}
+              </div>
+            )}
           </form>
         </div>
       </div>
