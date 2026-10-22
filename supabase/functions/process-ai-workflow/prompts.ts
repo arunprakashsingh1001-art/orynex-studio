@@ -31,6 +31,7 @@ CRITICAL SECURITY AND ALIGNMENT DIRECTIVE:
 7. VAGUE REQUIREMENTS & CLARIFICATION SAFEGUARD:
    If the client's project description is too vague, ambiguous, or underspecified for reliable, high-fidelity draft generation (for example, general non-specific requests like 'I want an app' or 'Help my company grow' with no clear scope, users, or workflows), DO NOT hallucinate or invent fictional client requirements.
    Instead, return a structured output where "needs_clarification" is true, provide an executive explanation in "summary", and list 2 to 4 concrete, actionable follow-up questions in "clarification_questions" targeting the missing requirements.
+8. REQUIRED RESPONSE SHAPE: Always include every top-level field listed in the JSON schema. When "needs_clarification" is true, give the 2 to 4 concrete questions and use neutral placeholders for proposal-only fields (empty strings, empty arrays, and empty nested values of the declared types); do not invent requirements. The workflow validates the questions and will not treat placeholder proposal fields as a completed proposal.
 `
 
 export const SERVICE_PROMPTS: Record<ServiceType, PromptDefinition> = {
@@ -103,7 +104,7 @@ Use the client description in <untrusted_client_brief> as the primary source for
           required: ['format', 'code_or_markup', 'walkthrough_notes'],
         },
       },
-      required: ['summary'],
+      required: ['summary', 'needs_clarification', 'clarification_questions', 'design_brief', 'page_structure', 'component_specifications', 'prototype_draft'],
     },
     validateOutput: (data) => {
       const errors: string[] = []
@@ -194,7 +195,7 @@ Use the client description in <untrusted_client_brief> as the primary source for
           },
         },
       },
-      required: ['summary'],
+      required: ['summary', 'needs_clarification', 'clarification_questions', 'executive_summary', 'data_flow', 'technology_choices', 'system_assumptions', 'risks_and_mitigations'],
     },
     validateOutput: (data) => {
       const errors: string[] = []
@@ -279,7 +280,7 @@ Use the client description in <untrusted_client_brief> as the primary source for
           },
         },
       },
-      required: ['summary'],
+      required: ['summary', 'needs_clarification', 'clarification_questions', 'engineering_strategy', 'file_manifest', 'core_implementation_draft', 'test_plan'],
     },
     validateOutput: (data) => {
       const errors: string[] = []
@@ -365,7 +366,7 @@ Use the client description in <untrusted_client_brief> as the primary source for
           },
         },
       },
-      required: ['summary'],
+      required: ['summary', 'needs_clarification', 'clarification_questions', 'audit_diagnosis', 'telemetry_and_metrics', 'proposed_improvements', 'validation_steps'],
     },
     validateOutput: (data) => {
       const errors: string[] = []
