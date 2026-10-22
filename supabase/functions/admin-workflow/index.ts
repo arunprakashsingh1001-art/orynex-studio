@@ -523,7 +523,7 @@ Deno.serve(async (req: Request) => {
           {
             job_id: jobId,
             recipient: clientEmail,
-            status: 'success',
+            status: isExplicitTestMode ? 'simulated' : 'success',
             resend_id: resendId,
             payload_snapshot: approvedSnapshot,
           },
@@ -737,7 +737,7 @@ Deno.serve(async (req: Request) => {
           {
             job_id: jobId,
             recipient: clientEmail,
-            status: 'success',
+            status: isExplicitTestMode ? 'simulated' : 'success',
             resend_id: resendId,
             payload_snapshot: activeDraft,
           },
