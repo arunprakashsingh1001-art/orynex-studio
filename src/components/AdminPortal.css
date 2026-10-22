@@ -1,0 +1,308 @@
+/* Orynex Studio — Admin Review Portal */
+.admin-viewport {
+  min-height: 100vh;
+  background: radial-gradient(circle at 50% 0%, var(--ground) 0%, var(--ground-deep) 70%);
+  color: var(--ink);
+  font-family: var(--font-body);
+  padding: 24px;
+}
+
+.admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 1400px;
+  margin: 0 auto 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.admin-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-badge {
+  background: rgba(255, 61, 0, 0.15);
+  color: var(--flame-lit);
+  border: 1px solid rgba(255, 61, 0, 0.3);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.admin-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.admin-auth-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.admin-btn {
+  background: var(--flame);
+  color: #ffffff;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-btn:hover:not(:disabled) {
+  background: var(--flame-lit);
+  box-shadow: 0 0 16px rgba(255, 61, 0, 0.4);
+}
+
+.admin-btn--secondary {
+  background: var(--glass);
+  border: 1px solid var(--hair);
+  color: var(--ink-soft);
+}
+
+.admin-btn--secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  box-shadow: none;
+}
+
+.admin-btn--danger {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+.admin-btn--danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.35);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.3);
+}
+
+.admin-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.admin-auth-card {
+  max-width: 440px;
+  margin: 80px auto;
+  background: var(--glass-strong);
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  padding: 32px;
+  backdrop-filter: blur(20px);
+}
+
+.admin-auth-card h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  margin-bottom: 8px;
+}
+
+.admin-auth-card p {
+  color: var(--ink-soft);
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+
+.admin-field {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-field label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+
+.admin-field input,
+.admin-field textarea {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #fff;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+}
+
+.admin-field input:focus,
+.admin-field textarea:focus {
+  border-color: var(--flame-lit);
+}
+
+.admin-error-banner {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.admin-layout {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.admin-sidebar {
+  background: var(--glass);
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+.admin-job-item {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--hair-soft);
+  border-radius: 8px;
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-job-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--hair);
+}
+
+.admin-job-item--active {
+  border-color: var(--flame-lit);
+  background: rgba(255, 61, 0, 0.08);
+}
+
+.admin-job-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.admin-job-service {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.admin-status-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.05em;
+}
+
+.admin-status--review_pending {
+  background: rgba(234, 179, 8, 0.2);
+  color: #fde047;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+
+.admin-status--queued,
+.admin-status--processing {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.admin-status--approved,
+.admin-status--delivered {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+.admin-status--rejected,
+.admin-status--failed {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.admin-job-client {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.admin-detail-panel {
+  background: var(--glass);
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+.admin-detail-section {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--hair-soft);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.admin-detail-section h3 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--flame-lit);
+  margin-bottom: 12px;
+}
+
+.admin-json-viewer {
+  background: #080302;
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  padding: 14px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #f5f5f5;
+  overflow-x: auto;
+  max-height: 400px;
+}
+
+.admin-actions-bar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair);
+}
+
+@media (max-width: 900px) {
+  .admin-layout {
+    grid-template-columns: 1fr;
+  }
+}

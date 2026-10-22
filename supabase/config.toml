@@ -1,0 +1,21 @@
+# ==============================================================================
+# Supabase Configuration for Orynex Studio
+# ==============================================================================
+
+# Function-specific configuration
+[functions.submit-lead]
+# This function serves a public website contact form and handles unauthenticated
+# client requests. Setting verify_jwt = false prevents the API gateway from 
+# rejecting anonymous visitors with HTTP 401.
+verify_jwt = false
+
+[functions.process-ai-workflow]
+# Background AI queue worker must only be executed by authorized service-role runners.
+# Enforce API gateway JWT verification.
+verify_jwt = true
+
+[functions.admin-workflow]
+# Admin review portal API requires a valid Supabase Auth user session.
+# Enforce API gateway JWT verification.
+verify_jwt = true
+

@@ -1,0 +1,43 @@
+# Environment & Local Secrets (NEVER commit real credentials)
+.env
+.env.*
+!.env.example
+
+# Backups & Snapshots
+.backups/
+*.bak
+*.backup
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Production & Build Artifacts
+dist/
+dist-ssr/
+build/
+*.local
+
+# Supabase Local & Temporary Artifacts
+supabase/.temp/
+.temp/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+
+# Editor & OS Metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

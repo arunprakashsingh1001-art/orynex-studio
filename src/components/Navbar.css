@@ -1,0 +1,194 @@
+/* Reference: logo hard left, links in a centred outlined capsule where each item
+   carries its own soft chip, one white pill CTA hard right. Bar is transparent. */
+.nav {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: clamp(14px, 1.7vw, 22px) var(--gutter);
+}
+
+.nav__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-display);
+  font-size: clamp(18px, 1.5vw, 22px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  transition: opacity 0.25s var(--ease-out);
+}
+.nav__brand:hover {
+  opacity: 0.9;
+}
+
+.nav__logo { width: 1.3em; height: 1.3em; }
+
+.nav__pill {
+  display: none;
+  padding: 5px;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: rgba(28, 10, 2, 0.34);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.nav__pill ul {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nav__item--menu {
+  position: relative;
+}
+
+.nav__pill a,
+.nav__link--btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  font-weight: 450;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.05);
+  transition: background-color 0.3s var(--ease-out), color 0.3s var(--ease-out);
+}
+
+.nav__pill a:hover,
+.nav__link--btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.nav__chev {
+  width: 10px;
+  height: 10px;
+  opacity: 0.7;
+  transition: transform 0.25s var(--ease-out);
+}
+
+.nav__chev.is-open {
+  transform: rotate(180deg);
+}
+
+/* Feature Dropdown Menu */
+.nav__dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 260px;
+  padding: 8px;
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  background: rgba(26, 9, 2, 0.96);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  animation: dropdownFadeIn 0.2s var(--ease-out) forwards;
+}
+
+.nav__dropdown a {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: transparent;
+  text-align: left;
+  transition: background-color 0.2s var(--ease-out), color 0.2s var(--ease-out);
+}
+
+.nav__dropdown a strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.nav__dropdown a span {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+.nav__dropdown a:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.nav__actions { display: flex; align-items: center; gap: 10px; }
+
+.nav__cta { font-size: 13.5px; font-weight: 550; }
+
+.nav__burger {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--hair);
+  border-radius: 10px;
+  background: rgba(28, 10, 2, 0.4);
+  backdrop-filter: blur(10px);
+}
+.nav__burger svg { width: 20px; height: 20px; }
+
+.nav__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.nav__sheet {
+  position: fixed;
+  inset: 68px 12px auto;
+  z-index: 25;
+  padding: 18px;
+  border: 1px solid var(--hair);
+  border-radius: 18px;
+  background: rgba(18, 5, 0, 0.94);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.nav__sheet ul { margin: 0 0 14px; padding: 0; list-style: none; display: grid; gap: 2px; }
+
+.nav__sheet a {
+  display: block;
+  padding: 12px 10px;
+  border-radius: 10px;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.86);
+}
+.nav__sheet a:hover { background: rgba(255, 255, 255, 0.07); }
+
+.nav__sheet-cta { width: 100%; justify-content: center; padding: 0.85em 1.4em; }
+
+@keyframes dropdownFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (min-width: 940px) {
+  .nav__pill { display: block; }
+  .nav__burger { display: none; }
+}
+
+@media (max-width: 480px) {
+  .nav__cta { display: none; }
+}
