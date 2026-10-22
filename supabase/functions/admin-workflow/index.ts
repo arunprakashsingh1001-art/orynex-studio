@@ -459,7 +459,7 @@ Deno.serve(async (req: Request) => {
 
       const resendApiKey = Deno.env.get('RESEND_API_KEY')
       const senderEmail = Deno.env.get('RESEND_FROM_EMAIL') || Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
-      const isExplicitTestMode = Deno.env.get('TEST_DELIVERY_MODE') === 'true'
+      const isExplicitTestMode = Deno.env.get('ENABLE_CUSTOMER_EMAILS') !== 'true' || Deno.env.get('TEST_DELIVERY_MODE') !== 'false'
       const retryAttemptNum = (existingJob.delivery_attempts || 0) + 1
       const idempotencyKey = `orynex_retry_${jobId}_rev${existingJob.approved_revision || 1}_att${retryAttemptNum}`
 
@@ -510,9 +510,9 @@ Deno.serve(async (req: Request) => {
         await supabase
           .from('ai_service_jobs')
           .update({
-            status: 'delivered',
-            delivery_status: 'sent',
-            delivered_at: new Date().toISOString(),
+            status: isExplicitTestMode ? 'approved' : 'delivered',
+            delivery_status: isExplicitTestMode ? 'not_started' : 'sent',
+            delivered_at: isExplicitTestMode ? null : new Date().toISOString(),
             delivery_resend_id: resendId,
             delivery_error: null,
             updated_at: new Date().toISOString(),
@@ -530,7 +530,7 @@ Deno.serve(async (req: Request) => {
         ])
 
         return jsonResponse(
-          { success: true, message: 'Delivery retried and dispatched successfully', resend_id: resendId },
+          { success: true, message: isExplicitTestMode ? 'Delivery simulation completed safely; no customer email was sent.' : 'Delivery retried and dispatched successfully', delivery_status: isExplicitTestMode ? 'not_started' : 'sent', simulated: isExplicitTestMode, resend_id: resendId },
           200,
           corsHeaders
         )
@@ -672,7 +672,7 @@ Deno.serve(async (req: Request) => {
       // Dispatch Client Delivery Email via Resend using ONLY the immutable approved snapshot
       const resendApiKey = Deno.env.get('RESEND_API_KEY')
       const senderEmail = Deno.env.get('RESEND_FROM_EMAIL') || Deno.env.get('SENDER_EMAIL') || 'Orynex Studio <onboarding@resend.dev>'
-      const isExplicitTestMode = Deno.env.get('TEST_DELIVERY_MODE') === 'true'
+      const isExplicitTestMode = Deno.env.get('ENABLE_CUSTOMER_EMAILS') !== 'true' || Deno.env.get('TEST_DELIVERY_MODE') !== 'false'
       const idempotencyKey = `orynex_approve_${jobId}_rev${currentRevision}`
 
       let resendId: string | null = null
@@ -724,9 +724,9 @@ Deno.serve(async (req: Request) => {
         await supabase
           .from('ai_service_jobs')
           .update({
-            status: 'delivered',
-            delivery_status: 'sent',
-            delivered_at: new Date().toISOString(),
+            status: isExplicitTestMode ? 'approved' : 'delivered',
+            delivery_status: isExplicitTestMode ? 'not_started' : 'sent',
+            delivered_at: isExplicitTestMode ? null : new Date().toISOString(),
             delivery_resend_id: resendId,
             delivery_error: null,
             updated_at: new Date().toISOString(),
@@ -746,9 +746,10 @@ Deno.serve(async (req: Request) => {
         return jsonResponse(
           {
             success: true,
-            message: `Proposal (Revision ${currentRevision}) successfully approved and delivered to client`,
+            message: isExplicitTestMode ? `Proposal (Revision ${currentRevision}) approved; delivery was simulated safely and no customer email was sent.` : `Proposal (Revision ${currentRevision}) successfully approved and delivered to client`,
             job_id: jobId,
-            delivery_status: 'sent',
+            delivery_status: isExplicitTestMode ? 'not_started' : 'sent',
+            simulated: isExplicitTestMode,
             resend_id: resendId,
             approved_revision: currentRevision,
           },
