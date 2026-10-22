@@ -80,10 +80,10 @@ export async function callGeminiServiceWorkflow(
     }
   }
 
-  // Official Google Gemini REST API endpoint
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  // Keep a supported stable fallback for temporary primary-model overloads.
+  // GEMINI_FALLBACK_MODEL can override the default fallback without a code change.
+  const fallbackModel = Deno.env.get('GEMINI_FALLBACK_MODEL') || 'gemini-3.6-flash'
+  let selectedModel = model
 
   try {
     const payload = {
@@ -102,27 +102,51 @@ export async function callGeminiServiceWorkflow(
       },
     }
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    })
+    const requestModel = async (candidateModel: string): Promise<Response> => {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+      try {
+        return await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': apiKey,
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          },
+        )
+      } finally {
+        clearTimeout(timeoutId)
+      }
+    }
 
-    clearTimeout(timeoutId)
+    let response = await requestModel(model)
+
+    // A 503 from Gemini means temporary provider overload. Try one supported fallback
+    // model instead of burning a whole queue retry on the same overloaded endpoint.
+    if (response.status === 503 && fallbackModel !== model) {
+      const primaryError = await response.text()
+      const safePrimaryError = apiKey ? primaryError.replaceAll(apiKey, '[REDACTED]') : primaryError
+      console.warn(
+        `[Gemini Client] Primary model ${model} returned HTTP 503; trying fallback ${fallbackModel}.`,
+        safePrimaryError.slice(0, 200),
+      )
+      selectedModel = fallbackModel
+      response = await requestModel(fallbackModel)
+    }
 
     if (!response.ok) {
       const errText = await response.text()
       const safeErrText = apiKey ? errText.replaceAll(apiKey, '[REDACTED]') : errText
-      console.error(`[Gemini Client] Provider error HTTP ${response.status}:`, safeErrText.slice(0, 300))
+      console.error(`[Gemini Client] Provider error HTTP ${response.status} for model ${selectedModel}:`, safeErrText.slice(0, 300))
       return {
         success: false,
         status: response.status,
         error: `Gemini API returned HTTP ${response.status}`,
-        modelUsed: model,
+        modelUsed: selectedModel,
         promptSnapshot,
       }
     }
@@ -142,7 +166,7 @@ export async function callGeminiServiceWorkflow(
       return {
         success: false,
         error: 'Empty response payload from Gemini API',
-        modelUsed: model,
+        modelUsed: selectedModel,
         promptSnapshot,
       }
     }
@@ -154,7 +178,7 @@ export async function callGeminiServiceWorkflow(
       return {
         success: false,
         error: 'Failed to parse Gemini output as JSON',
-        modelUsed: model,
+        modelUsed: selectedModel,
         promptSnapshot,
       }
     }
@@ -167,7 +191,7 @@ export async function callGeminiServiceWorkflow(
         success: false,
         error: `Schema validation failed: ${validation.errors.join('; ')}`,
         draft: parsedData,
-        modelUsed: model,
+        modelUsed: selectedModel,
         promptSnapshot,
       }
     }
@@ -175,11 +199,10 @@ export async function callGeminiServiceWorkflow(
     return {
       success: true,
       draft: parsedData,
-      modelUsed: model,
+      modelUsed: selectedModel,
       promptSnapshot,
     }
   } catch (err) {
-    clearTimeout(timeoutId)
     const isTimeout = (err as Error).name === 'AbortError'
     let errorMessage = isTimeout ? 'Gemini API request timed out after 35s' : (err as Error).message
     if (apiKey && errorMessage.includes(apiKey)) {
@@ -188,7 +211,7 @@ export async function callGeminiServiceWorkflow(
     return {
       success: false,
       error: errorMessage,
-      modelUsed: model,
+      modelUsed: selectedModel,
       promptSnapshot,
     }
   }
