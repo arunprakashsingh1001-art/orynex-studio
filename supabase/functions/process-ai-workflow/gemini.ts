@@ -123,29 +123,53 @@ export async function callGeminiServiceWorkflow(
       }
     }
 
-    let response = await requestModel(model)
+    const modelCandidates = Array.from(new Set([
+      model,
+      fallbackModel,
+      Deno.env.get('GEMINI_SECONDARY_FALLBACK_MODEL') || 'gemini-3.5-flash-lite',
+    ]))
+    let response: Response | null = null
 
-    // A 503 from Gemini means temporary provider overload. Try one supported fallback
-    // model instead of burning a whole queue retry on the same overloaded endpoint.
-    if (response.status === 503 && fallbackModel !== model) {
-      const primaryError = await response.text()
-      const safePrimaryError = apiKey ? primaryError.replaceAll(apiKey, '[REDACTED]') : primaryError
-      console.warn(
-        `[Gemini Client] Primary model ${model} returned HTTP 503; trying fallback ${fallbackModel}.`,
-        safePrimaryError.slice(0, 200),
-      )
-      selectedModel = fallbackModel
-      response = await requestModel(fallbackModel)
-    }
+    // Google reports HTTP 503 as temporary provider overload. Walk the supported
+    // fallback chain before consuming a full durable-queue retry.
+    for (let attempt = 0; attempt < modelCandidates.length; attempt++) {
+      const candidateModel = modelCandidates[attempt]
+      selectedModel = candidateModel
+      response = await requestModel(candidateModel)
 
-    if (!response.ok) {
+      if (response.ok) {
+        break
+      }
+
       const errText = await response.text()
       const safeErrText = apiKey ? errText.replaceAll(apiKey, '[REDACTED]') : errText
-      console.error(`[Gemini Client] Provider error HTTP ${response.status} for model ${selectedModel}:`, safeErrText.slice(0, 300))
+      const hasFallback = attempt < modelCandidates.length - 1
+
+      if (response.status === 503 && hasFallback) {
+        const nextModel = modelCandidates[attempt + 1]
+        console.warn(
+          `[Gemini Client] Model ${candidateModel} returned HTTP 503; trying fallback ${nextModel}.`,
+          safeErrText.slice(0, 200),
+        )
+        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)))
+        continue
+      }
+
+      console.error(`[Gemini Client] Provider error HTTP ${response.status} for model ${candidateModel}:`, safeErrText.slice(0, 300))
       return {
         success: false,
         status: response.status,
         error: `Gemini API returned HTTP ${response.status}`,
+        modelUsed: candidateModel,
+        promptSnapshot,
+      }
+    }
+
+    if (!response || !response.ok) {
+      return {
+        success: false,
+        status: response?.status,
+        error: 'Gemini API could not return a successful response from the configured model chain',
         modelUsed: selectedModel,
         promptSnapshot,
       }
