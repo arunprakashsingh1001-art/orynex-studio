@@ -9,6 +9,119 @@ import './AdminPortal.css'
 
 const AUTHORIZED_ADMIN_EMAIL = 'arunprakashsingh1001@gmail.com'
 
+function humanizeLabel(value) {
+  return String(value)
+    .replace(/_/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^./, (char) => char.toUpperCase())
+}
+
+function buildSafePreviewDocument(markup) {
+  const securityMeta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'; font-src data:">'
+  if (/<html\b/i.test(markup)) {
+    if (/<head\b[^>]*>/i.test(markup)) {
+      return markup.replace(/<head\b[^>]*>/i, (head) => head + securityMeta)
+    }
+    return markup.replace(/<html\b[^>]*>/i, (html) => html + '<head>' + securityMeta + '<meta name="viewport" content="width=device-width, initial-scale=1"></head>')
+  }
+  return '<!doctype html><html><head><meta charset="utf-8">' + securityMeta +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<style>body{font-family:Inter,system-ui,sans-serif;line-height:1.5;padding:24px;color:#172033}img{max-width:100%;height:auto}button,a{cursor:pointer}</style>' +
+    '</head><body>' + markup + '</body></html>'
+}
+
+function renderPreviewValue(value, label, path = '') {
+  if (value === null || value === undefined || value === '') return null
+
+  if (path.endsWith('code_or_markup') && typeof value === 'string') {
+    const looksLikeHtml = /<(?:!doctype|html|body|main|div|section|header|nav|h[1-6]|p|button|form|article)\b/i.test(value)
+      && !/\b(?:import|export)\s+(?:.*\s+from\s+)?['"]/.test(value)
+      && !/\bfunction\s+[A-Za-z_$]/.test(value)
+    return (
+      <section className="admin-preview-section">
+        <h4>{humanizeLabel(label)}</h4>
+        {looksLikeHtml ? (
+          <>
+            <p className="admin-preview-hint">Isolated HTML preview. Scripts and external network resources are blocked.</p>
+            <iframe
+              className="admin-prototype-frame"
+              title="Generated prototype preview"
+              sandbox=""
+              referrerPolicy="no-referrer"
+              srcDoc={buildSafePreviewDocument(value)}
+            />
+          </>
+        ) : (
+          <pre className="admin-preview-code"><code>{value}</code></pre>
+        )}
+      </section>
+    )
+  }
+
+  if (typeof value === 'string') {
+    return (
+      <section className="admin-preview-section">
+        <h4>{humanizeLabel(label)}</h4>
+        <p className="admin-preview-copy">{value}</p>
+      </section>
+    )
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return (
+      <section className="admin-preview-section">
+        <h4>{humanizeLabel(label)}</h4>
+        <p className="admin-preview-copy">{String(value)}</p>
+      </section>
+    )
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null
+    return (
+      <section className="admin-preview-section">
+        <h4>{humanizeLabel(label)}</h4>
+        {value.every((item) => typeof item !== 'object' || item === null) ? (
+          <ul className="admin-preview-list">
+            {value.map((item, index) => <li key={index}>{String(item)}</li>)}
+          </ul>
+        ) : (
+          <div className="admin-preview-card-grid">
+            {value.map((item, index) => (
+              <article className="admin-preview-card" key={index}>
+                {renderPreviewValue(item, `${humanizeLabel(label)} ${index + 1}`, path)}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    )
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, item]) =>
+      item !== null && item !== undefined && item !== '' &&
+      !(Array.isArray(item) && item.length === 0)
+    )
+    if (entries.length === 0) return null
+    return (
+      <section className="admin-preview-group">
+        {path !== '' && <h3>{humanizeLabel(label)}</h3>}
+        <div className="admin-preview-fields">
+          {entries.map(([key, item]) => (
+            <div key={key}>{renderPreviewValue(item, key, path ? `${path}.${key}` : key)}</div>
+          ))}
+        </div>
+      </section>
+    )
+  }
+
+  return null
+}
+
+
 export default function AdminPortal() {
   const [token, setToken] = useState(() => localStorage.getItem('orynex_admin_token') || '')
   const [currentUser, setCurrentUser] = useState(() => {
@@ -34,6 +147,7 @@ export default function AdminPortal() {
 
   // Active view tab in detail panel: 'proposal' | 'revisions' | 'decisions' | 'delivery'
   const [activeTab, setActiveTab] = useState('proposal')
+  const [proposalView, setProposalView] = useState('preview')
 
   // Draft editor state
   const [draftJsonText, setDraftJsonText] = useState('')
@@ -408,6 +522,13 @@ export default function AdminPortal() {
   }
 
   const activeDraftObj = selectedJob?.edited_draft || selectedJob?.generated_draft || {}
+  const draftPreviewObj = (() => {
+    try {
+      return JSON.parse(draftJsonText)
+    } catch {
+      return activeDraftObj
+    }
+  })()
   const revisionsList = selectedJob?.revisions || []
   const decisionsList = selectedJob?.decisions || []
   const deliveryLogsList = selectedJob?.delivery_logs || []
@@ -601,16 +722,49 @@ export default function AdminPortal() {
                     </div>
                   )}
 
-                  <div className="admin-field">
-                    <label htmlFor="draft-editor">Editable Structured JSON Deliverable:</label>
-                    <textarea
-                      id="draft-editor"
-                      className="admin-json-viewer"
-                      rows={14}
-                      value={draftJsonText}
-                      onChange={(e) => setDraftJsonText(e.target.value)}
-                    />
+                  <div className="admin-proposal-view-switch" role="tablist" aria-label="Proposal view">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={proposalView === 'preview'}
+                      className={`admin-proposal-view-btn ${proposalView === 'preview' ? 'admin-proposal-view-btn--active' : ''}`}
+                      onClick={() => setProposalView('preview')}
+                    >
+                      Frontend Preview
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={proposalView === 'json'}
+                      className={`admin-proposal-view-btn ${proposalView === 'json' ? 'admin-proposal-view-btn--active' : ''}`}
+                      onClick={() => setProposalView('json')}
+                    >
+                      JSON Editor
+                    </button>
                   </div>
+
+                  {proposalView === 'preview' ? (
+                    <div className="admin-proposal-preview" role="tabpanel">
+                      {draftPreviewObj.needs_clarification && (
+                        <div className="admin-preview-clarification">
+                          <strong>Client clarification required</strong>
+                          <p>This draft contains scoping questions rather than a finished proposal.</p>
+                        </div>
+                      )}
+                      {renderPreviewValue(draftPreviewObj, 'Proposal')}
+                    </div>
+                  ) : (
+                    <div className="admin-field" role="tabpanel">
+                      <label htmlFor="draft-editor">Editable Structured JSON Deliverable:</label>
+                      <textarea
+                        id="draft-editor"
+                        className="admin-json-viewer"
+                        rows={14}
+                        value={draftJsonText}
+                        onChange={(e) => setDraftJsonText(e.target.value)}
+                      />
+                    </div>
+                  )}
 
                   <div className="admin-field" style={{ marginTop: 12 }}>
                     <label htmlFor="review-notes">Admin Review Notes / Audit Memo:</label>
