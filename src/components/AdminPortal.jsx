@@ -41,7 +41,7 @@ function escapeHtml(value) {
 function findPrototypeMarkup(value, depth = 0) {
   if (!value || typeof value !== 'object' || depth > 8) return ''
   for (const [key, child] of Object.entries(value)) {
-    if (key === 'code_or_markup' && typeof child === 'string' && /<(?:!doctype|html|body|main|div|section|header|nav|h[1-6]|p|button|form|article)\\b/i.test(child)) {
+    if (key === 'code_or_markup' && typeof child === 'string' && /<(?:!doctype|html|body|main|div|section|header|nav|h[1-6]|p|button|form|article)\b/i.test(child)) {
       return child
     }
     if (child && typeof child === 'object') {
