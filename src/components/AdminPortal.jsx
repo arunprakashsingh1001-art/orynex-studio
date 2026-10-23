@@ -32,6 +32,93 @@ function buildSafePreviewDocument(markup) {
     '</head><body>' + markup + '</body></html>'
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[char])
+}
+
+function findPrototypeMarkup(value, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 8) return ''
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'code_or_markup' && typeof child === 'string' && /<(?:!doctype|html|body|main|div|section|header|nav|h[1-6]|p|button|form|article)\\b/i.test(child)) {
+      return child
+    }
+    if (child && typeof child === 'object') {
+      const nested = findPrototypeMarkup(child, depth + 1)
+      if (nested) return nested
+    }
+  }
+  return ''
+}
+
+function renderReviewHtmlValue(value, label, depth = 0) {
+  if (value === null || value === undefined || value === '' || depth > 4) return ''
+  const safeLabel = escapeHtml(humanizeLabel(label))
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return `<div class="detail"><h3>${safeLabel}</h3><p>${escapeHtml(value)}</p></div>`
+  }
+  if (Array.isArray(value)) {
+    if (!value.length) return ''
+    const items = value.map((item, index) => {
+      if (item && typeof item === 'object') {
+        const inner = Object.entries(item).map(([key, child]) => renderReviewHtmlValue(child, key, depth + 1)).join('')
+        return `<article class="card">${inner || `<p>${escapeHtml(JSON.stringify(item))}</p>`}</article>`
+      }
+      return `<li>${escapeHtml(item)}</li>`
+    })
+    return value.every((item) => item === null || typeof item !== 'object')
+      ? `<section class="content-section"><h2>${safeLabel}</h2><ul>${items.join('')}</ul></section>`
+      : `<section class="content-section"><h2>${safeLabel}</h2><div class="grid">${items.join('')}</div></section>`
+  }
+  const entries = Object.entries(value).filter(([key, child]) =>
+    key !== 'code_or_markup' && child !== null && child !== undefined && child !== '' &&
+    !(Array.isArray(child) && child.length === 0)
+  )
+  if (!entries.length) return ''
+  if (depth === 0) {
+    return entries.map(([key, child]) => {
+      if (typeof child === 'string' && /summary|diagnosis|strategy|overview|brief/i.test(key)) {
+        return `<section class="intro"><p class="eyebrow">${escapeHtml(humanizeLabel(key))}</p><p>${escapeHtml(child)}</p></section>`
+      }
+      return renderReviewHtmlValue(child, key, depth + 1)
+    }).join('')
+  }
+  return `<section class="content-section"><h2>${safeLabel}</h2><div class="detail-grid">${entries.map(([key, child]) => renderReviewHtmlValue(child, key, depth + 1)).join('')}</div></section>`
+}
+
+function buildResponsiveReviewDocument(draft) {
+  const markup = findPrototypeMarkup(draft)
+  if (markup) return buildSafePreviewDocument(markup)
+
+  const title = draft?.title || draft?.project_name || draft?.business_name || 'Project concept'
+  const summary = draft?.summary || draft?.executive_summary || draft?.engineering_strategy || draft?.audit_diagnosis || 'A responsive concept based on the approved proposal.'
+  const sections = renderReviewHtmlValue(draft, 'Proposal')
+  const documentStyles = `
+    :root{color-scheme:light;--ink:#18202c;--muted:#5e6a7c;--accent:#ea4b2a;--line:#e4e8ee;--surface:#f5f7fa}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);line-height:1.6;background:#fff}
+    a{color:inherit}.site-nav{display:flex;align-items:center;justify-content:space-between;gap:16px;max-width:1120px;margin:auto;padding:22px clamp(18px,5vw,56px);border-bottom:1px solid var(--line)}
+    .brand{font-weight:800;letter-spacing:-.04em;font-size:19px}.brand span{color:var(--accent)}.nav-note{font-size:12px;color:var(--muted)}
+    .hero{padding:clamp(44px,9vw,100px) clamp(18px,5vw,56px);background:radial-gradient(ellipse at top right,#fff0e9,transparent 55%),linear-gradient(135deg,#fbfcfe,#f5f7fa)}
+    .hero-inner{max-width:1000px;margin:auto}.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:11px;font-weight:800;color:var(--accent);margin:0 0 14px}
+    h1{font-size:clamp(34px,6vw,66px);letter-spacing:-.055em;line-height:1.06;max-width:850px;margin:0 0 22px} .hero-copy{max-width:720px;font-size:clamp(16px,2vw,19px);color:#586477;margin:0}
+    .hero-pill{display:inline-flex;margin-top:28px;border-radius:999px;padding:9px 14px;background:#fff;border:1px solid #f2d4ca;color:#8e3928;font-size:12px;font-weight:700}
+    main{max-width:1120px;margin:auto;padding:42px clamp(18px,5vw,56px) 64px}.intro{padding:20px 22px;margin-bottom:28px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:0 10px 32px #18202c08}.intro p:last-child{margin-bottom:0}
+    .content-section{margin:34px 0}.content-section>h2{font-size:clamp(20px,3vw,27px);letter-spacing:-.03em;margin:0 0 18px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+    .card{min-width:0;border:1px solid var(--line);border-radius:15px;padding:18px;background:#fff;box-shadow:0 8px 24px #18202c06}.card .detail{border:0;padding:0;margin:0 0 14px}.card .detail:last-child{margin-bottom:0}
+    .detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.detail{min-width:0;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.detail h3{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:0 0 6px}.detail p{font-size:14px;margin:0;overflow-wrap:anywhere}.detail ul{margin:0;padding-left:20px}
+    ul{padding-left:20px}li+li{margin-top:7px}.site-footer{border-top:1px solid var(--line);padding:24px clamp(18px,5vw,56px);color:var(--muted);font-size:12px;text-align:center}
+    @media(max-width:760px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-grid{grid-template-columns:1fr}.site-nav{padding-block:16px}.nav-note{max-width:140px;text-align:right}}
+    @media(max-width:480px){.grid{grid-template-columns:1fr}.hero{padding-top:42px;padding-bottom:46px}.content-section{margin:26px 0}.card{padding:15px}.site-nav{align-items:flex-start}}
+  `
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'; font-src data:">' +
+    '<style>' + documentStyles + '</style></head><body>' +
+    '<nav class="site-nav"><div class="brand">orynex<span>.</span></div><div class="nav-note">Concept preview · Responsive layout</div></nav>' +
+    '<header class="hero"><div class="hero-inner"><p class="eyebrow">Project concept</p><h1>' + escapeHtml(title) + '</h1><p class="hero-copy">' + escapeHtml(summary) + '</p><span class="hero-pill">Prepared from the proposal specification</span></div></header>' +
+    '<main>' + sections + '</main><footer class="site-footer">Concept preview generated from the proposal · Review all content before client delivery</footer></body></html>'
+}
+
 function renderPreviewValue(value, label, path = '') {
   if (value === null || value === undefined || value === '') return null
 
@@ -147,7 +234,8 @@ export default function AdminPortal() {
 
   // Active view tab in detail panel: 'proposal' | 'revisions' | 'decisions' | 'delivery'
   const [activeTab, setActiveTab] = useState('proposal')
-  const [proposalView, setProposalView] = useState('preview')
+  const [previewDevice, setPreviewDevice] = useState('desktop')
+  const [previewRefresh, setPreviewRefresh] = useState(0)
 
   // Draft editor state
   const [draftJsonText, setDraftJsonText] = useState('')
@@ -675,6 +763,13 @@ export default function AdminPortal() {
               <div className="admin-tabs">
                 <button
                   type="button"
+                  className={`admin-tab ${activeTab === 'frontend-review' ? 'admin-tab--active' : ''}`}
+                  onClick={() => setActiveTab('frontend-review')}
+                >
+                  Frontend Review
+                </button>
+                <button
+                  type="button"
                   className={`admin-tab ${activeTab === 'proposal' ? 'admin-tab--active' : ''}`}
                   onClick={() => setActiveTab('proposal')}
                 >
@@ -703,69 +798,84 @@ export default function AdminPortal() {
                 </button>
               </div>
 
+              {/* Dedicated responsive frontend review workspace */}
+              {activeTab === 'frontend-review' && (
+                <div className="admin-detail-section admin-frontend-review">
+                  <div className="admin-review-heading">
+                    <div>
+                      <p className="admin-review-eyebrow">Visual quality check</p>
+                      <h3>Frontend Review Studio</h3>
+                      <p className="admin-review-subtitle">Inspect the proposal as a responsive page before client delivery. Switch viewport sizes to check layout behavior.</p>
+                    </div>
+                    <div className="admin-review-meta">
+                      <span className={`admin-status-badge admin-status--${selectedJob.status}`}>{selectedJob.status.replace('_', ' ')}</span>
+                      <span>Revision {selectedJob.revision_count || 1}</span>
+                    </div>
+                  </div>
+
+                  {draftPreviewObj.needs_clarification && (
+                    <div className="admin-preview-clarification">
+                      <strong>Client clarification required</strong>
+                      <p>This proposal contains scoping questions, not a finished client-facing website. The preview is only a structured concept.</p>
+                    </div>
+                  )}
+
+                  <div className="admin-review-toolbar">
+                    <div className="admin-device-switch" role="group" aria-label="Preview viewport size">
+                      <button type="button" className={previewDevice === 'desktop' ? 'is-active' : ''} aria-pressed={previewDevice === 'desktop'} onClick={() => setPreviewDevice('desktop')}>Desktop</button>
+                      <button type="button" className={previewDevice === 'tablet' ? 'is-active' : ''} aria-pressed={previewDevice === 'tablet'} onClick={() => setPreviewDevice('tablet')}>Tablet</button>
+                      <button type="button" className={previewDevice === 'mobile' ? 'is-active' : ''} aria-pressed={previewDevice === 'mobile'} onClick={() => setPreviewDevice('mobile')}>Mobile</button>
+                    </div>
+                    <div className="admin-review-toolbar-actions">
+                      <span>{previewDevice === 'desktop' ? 'Fluid desktop' : previewDevice === 'tablet' ? '768px tablet' : '390px mobile'}</span>
+                      <button type="button" className="admin-btn admin-btn--secondary" onClick={() => setPreviewRefresh((value) => value + 1)}>Refresh preview</button>
+                    </div>
+                  </div>
+
+                  <div className="admin-preview-stage">
+                    <div className={`admin-preview-device admin-preview-device--${previewDevice}`}>
+                      <iframe
+                        key={`${selectedJob.id}-${previewRefresh}-${previewDevice}`}
+                        className="admin-review-iframe"
+                        title={`Responsive frontend preview for ${selectedJob.leads?.name || 'client proposal'}`}
+                        sandbox=""
+                        referrerPolicy="no-referrer"
+                        srcDoc={buildResponsiveReviewDocument(draftPreviewObj)}
+                      />
+                    </div>
+                  </div>
+                  <p className="admin-review-footnote"><strong>Safe preview:</strong> the page runs in an isolated frame. Scripts and external network requests are blocked. If the proposal has no working HTML prototype, this view builds a polished responsive concept from its structured fields; it is a review aid, not a production deployment.</p>
+                </div>
+              )}
+
               {/* Tab 1: Active Proposal & Editable JSON */}
               {activeTab === 'proposal' && (
                 <div className="admin-detail-section">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <h3 style={{ margin: 0 }}>Proposal Deliverable Specification</h3>
-                    <span style={{ fontSize: 12, color: 'var(--flame-lit)' }}>
-                      Model: {selectedJob.model || 'gemini-3.8-flash'}
-                    </span>
+                  <div className="admin-proposal-header">
+                    <div>
+                      <h3>Proposal Deliverable Specification</h3>
+                      <p>Review or edit the structured data that powers the frontend concept.</p>
+                    </div>
+                    <span className="admin-model-label">Model: {selectedJob.model || 'gemini-3.8-flash'}</span>
                   </div>
 
                   {activeDraftObj.needs_clarification && (
-                    <div style={{ background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)', padding: 12, borderRadius: 6, marginBottom: 14 }}>
-                      <strong style={{ color: '#fde047' }}>Notice: Requires Client Clarification</strong>
-                      <p style={{ margin: '4px 0 0', fontSize: 13, color: '#fef08a' }}>
-                        The AI determined that the customer brief is underspecified. Scoping questions have been generated instead of fabricating requirements.
-                      </p>
+                    <div className="admin-preview-clarification">
+                      <strong>Notice: Requires Client Clarification</strong>
+                      <p>The AI determined that the customer brief is underspecified. Scoping questions have been generated instead of fabricating requirements.</p>
                     </div>
                   )}
 
-                  <div className="admin-proposal-view-switch" role="tablist" aria-label="Proposal view">
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={proposalView === 'preview'}
-                      className={`admin-proposal-view-btn ${proposalView === 'preview' ? 'admin-proposal-view-btn--active' : ''}`}
-                      onClick={() => setProposalView('preview')}
-                    >
-                      Frontend Preview
-                    </button>
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={proposalView === 'json'}
-                      className={`admin-proposal-view-btn ${proposalView === 'json' ? 'admin-proposal-view-btn--active' : ''}`}
-                      onClick={() => setProposalView('json')}
-                    >
-                      JSON Editor
-                    </button>
+                  <div className="admin-field">
+                    <label htmlFor="draft-editor">Editable Structured JSON Deliverable:</label>
+                    <textarea
+                      id="draft-editor"
+                      className="admin-json-viewer"
+                      rows={18}
+                      value={draftJsonText}
+                      onChange={(e) => setDraftJsonText(e.target.value)}
+                    />
                   </div>
-
-                  {proposalView === 'preview' ? (
-                    <div className="admin-proposal-preview" role="tabpanel">
-                      {draftPreviewObj.needs_clarification && (
-                        <div className="admin-preview-clarification">
-                          <strong>Client clarification required</strong>
-                          <p>This draft contains scoping questions rather than a finished proposal.</p>
-                        </div>
-                      )}
-                      {renderPreviewValue(draftPreviewObj, 'Proposal')}
-                    </div>
-                  ) : (
-                    <div className="admin-field" role="tabpanel">
-                      <label htmlFor="draft-editor">Editable Structured JSON Deliverable:</label>
-                      <textarea
-                        id="draft-editor"
-                        className="admin-json-viewer"
-                        rows={14}
-                        value={draftJsonText}
-                        onChange={(e) => setDraftJsonText(e.target.value)}
-                      />
-                    </div>
-                  )}
-
                   <div className="admin-field" style={{ marginTop: 12 }}>
                     <label htmlFor="review-notes">Admin Review Notes / Audit Memo:</label>
                     <input
